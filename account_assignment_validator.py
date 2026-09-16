@@ -102,7 +102,8 @@ BAND_PATTERNS = [
 HINTS = {
     "account_name": ["account name", "company name", "name"],
     "segment":      ["us market segment", "market segment", "sales segment",
-                     "account segment", "segment", "territory", "assignment"],
+                     "account segment", "owner division", "acct owner division",
+                     "acct division", "segment", "territory", "division", "assignment"],
     "dnb":          ["d&b employees worldwide", "d&b employee worldwide",
                      "employees worldwide", "d&b employees", "dnb employees",
                      "employee worldwide", "d&b", "dnb", "dun",
