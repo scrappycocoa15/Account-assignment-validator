@@ -4,7 +4,7 @@ Account Assignment Validator
 Streamlit Cloud compatible — only dependency is streamlit.
 Run locally:  streamlit run app_v2.py
 
-LinkedIn enrichment uses DuckDuckGo HTML search — no API key required.
+LinkedIn enrichment — accounts with missing or unreliable D&B (<10) receive a
 """
 
 import streamlit as st
@@ -13,7 +13,6 @@ import urllib.parse
 import urllib.error
 import json
 import re
-import time
 import csv
 import io
 from html import escape as he
@@ -70,8 +69,6 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
 # ── Constants ─────────────────────────────────────────────────────────────────
 SFDC_API_VERSION = "v59.0"
 DNB_THRESHOLD    = 300
-DDG_SEARCH_URL   = "https://html.duckduckgo.com/html/"
-DDG_DELAY        = 1.2         # seconds between DDG requests (be respectful)
 DEFAULT_INSTANCE = "https://sapconcur.my.salesforce.com"
 DEFAULT_REPORT   = "00OPg00000QbzTl"
 
@@ -240,111 +237,21 @@ def parse_report(data):
         })
     return rows, labels
 
-# ── DuckDuckGo LinkedIn search (no API key required) ─────────────────────────
+# ── LinkedIn search URL builder ───────────────────────────────────────────────
 
-def search_linkedin(name, city, state, website):
+def linkedin_search_url(name):
     """
-    Search DuckDuckGo for the company's LinkedIn page.
-    No API key required.
-    Returns (linkedin_url, band, note).
+    Build a LinkedIn company search URL for manual review.
+    No API call — opens LinkedIn's own company search in a new tab.
     """
-    # Build query
-    parts = [f'site:linkedin.com/company "{name}"']
-    if city and str(city).strip():
-        parts.append(str(city).strip())
-    if state and str(state).strip():
-        parts.append(str(state).strip())
-    if website:
-        domain = re.sub(r"https?://(www\.)?", "", str(website)).split("/")[0].strip()
-        if domain:
-            parts.append(domain)
-
-    query   = " ".join(parts)
-    req_url = DDG_SEARCH_URL + "?" + urllib.parse.urlencode({"q": query})
-
-    req = urllib.request.Request(
-        req_url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-        },
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8", errors="ignore")
-    except Exception as e:
-        return None, None, f"Search unavailable: {e}"
-
-    # ── 1. Find LinkedIn company URL ──────────────────────────────────────────
-
-    li_url = None
-
-    # Strategy A: decode uddg= redirect parameters (DDG's redirect wrapper)
-    for enc in re.findall(r'uddg=([^&"\'>\s]+)', html):
-        try:
-            dec = urllib.parse.unquote(enc)
-            if "linkedin.com/company/" in dec:
-                # Must not be a /jobs or /in/ sub-path
-                m = re.search(
-                    r"(https?://(?:www\.)?linkedin\.com/company/[^\s\"'&/?#]+)",
-                    dec, re.IGNORECASE
-                )
-                if m:
-                    candidate = m.group(1)
-                    if "/jobs" not in candidate and "/in/" not in candidate:
-                        li_url = candidate
-                        break
-        except Exception:
-            continue
-
-    # Strategy B: direct href attributes
-    if not li_url:
-        for m in re.finditer(
-            r'href=["\']([^"\']*linkedin\.com/company/[^"\'?#\s]+)["\']',
-            html, re.IGNORECASE
-        ):
-            candidate = m.group(1)
-            if "/jobs" not in candidate and "/in/" not in candidate and "/school" not in candidate:
-                li_url = candidate if candidate.startswith("http") else "https://" + candidate
-                break
-
-    # ── 2. Extract LinkedIn band from result snippets ─────────────────────────
-
-    li_band = None
-
-    # DDG result snippets appear in <a class="result__snippet">…</a>
-    # or <div class="result__snippet">…</div>
-    for raw_snippet in re.findall(
-        r'class=["\']result__snippet["\'][^>]*>(.*?)</(?:a|div)>',
-        html, re.DOTALL | re.IGNORECASE
-    ):
-        clean = re.sub(r"<[^>]+>", " ", raw_snippet).strip()
-        band  = extract_band(clean)
-        if band:
-            li_band = band
-            break
-
-    # ── 3. Return ─────────────────────────────────────────────────────────────
-
-    if li_url:
-        return li_url, li_band, None
-
-    # Fallback: return a LinkedIn company search URL the user can open manually
-    fallback_url = (
+    return (
         "https://www.linkedin.com/search/results/companies/?"
         + urllib.parse.urlencode({"keywords": name})
     )
-    return fallback_url, None, "No exact LinkedIn match found — search link provided"
 
 # ── Row processor ─────────────────────────────────────────────────────────────
 
-def process_row(row, mapping, search_count):
+def process_row(row, mapping):
     name        = str(row.get(mapping.get("account_name") or "", "")).strip()
     current_raw = str(row.get(mapping.get("segment")      or "", "")).strip()
     current_seg = normalize_segment(current_raw)
@@ -367,7 +274,7 @@ def process_row(row, mapping, search_count):
     did_search = False
 
     if dnb_val is not None:
-        # ── Standard ROE path — D&B present at any value ──────────────────────
+        # ── ROE path — D&B present at any value ───────────────────────────────
         if dnb_val >= DNB_THRESHOLD:
             rec["expected_segment"] = "US National"
             rec["basis"]            = f"D\u0026B: {dnb_val:,} \u2265 {DNB_THRESHOLD}"
@@ -381,35 +288,10 @@ def process_row(row, mapping, search_count):
         )
 
     else:
-        # ── D&B unavailable → LinkedIn enrichment via DuckDuckGo ─────────────
-        rec["basis"] = "No D\u0026B data \u2014 using LinkedIn"
-
-        # Rate-limit DuckDuckGo requests
-        if search_count > 0:
-            time.sleep(DDG_DELAY)
-
-        li_url, li_band, err = search_linkedin(name, city, state, website)
-        did_search = True
-
-        if li_url:
-            rec["linkedin_url"] = li_url
-            if li_band:
-                expected               = BAND_TO_SEGMENT.get(li_band, "\u2014")
-                rec["linkedin_band"]   = li_band
-                rec["expected_segment"]= expected
-                rec["basis"]          += f" | LinkedIn band: {li_band}"
-                rec["status"] = (
-                    "Correct (LinkedIn)"
-                    if current_seg == normalize_segment(expected)
-                    else "Incorrect (LinkedIn)"
-                )
-            else:
-                rec["status"] = "Needs Review"
-                note = err or "band not in snippet"
-                rec["basis"] += f" | LinkedIn found \u2014 {note}"
-        else:
-            rec["status"] = "Data Gap"
-            rec["basis"] += f" | {err or 'No LinkedIn match'}"
+        # ── D&B unavailable → LinkedIn search link for manual review ──────────
+        rec["basis"]        = "No D\u0026B data \u2014 manual LinkedIn check needed"
+        rec["linkedin_url"] = linkedin_search_url(name)
+        rec["status"]       = "Needs Review"
 
     return rec, did_search
 
@@ -507,11 +389,8 @@ st.markdown("""
   <b>ROE:</b>
   D&amp;B &ge; 300 &rarr; <b>US National</b> &nbsp;|&nbsp;
   D&amp;B &lt; 300 &rarr; <b>General Business</b> &nbsp;|&nbsp;
-  D&amp;B unavailable &rarr; LinkedIn band above 201&ndash;500
-  &rarr; <b>US National</b>, rest &rarr; <b>General Business</b>
-  &nbsp;&nbsp;<span style="color:#6A7275">
-  &bull; LinkedIn enrichment uses DuckDuckGo search &mdash; no API key required
-  </span>
+  D&amp;B missing &rarr; <b>Needs Review</b>
+  with a LinkedIn search link for manual verification
 </div>
 """, unsafe_allow_html=True)
 
@@ -629,10 +508,9 @@ if st.session_state.get("rows"):
         key="btn_validate",
         disabled=(acct_col == seg_col),
     ):
-        results      = []
-        search_count = 0
-        total        = len(rows)
-        prog         = st.progress(0.0, text="Starting\u2026")
+        results = []
+        total   = len(rows)
+        prog    = st.progress(0.0, text="Starting\u2026")
 
         for i, row in enumerate(rows):
             name = str(row.get(acct_col, "")).strip()
@@ -640,9 +518,7 @@ if st.session_state.get("rows"):
                 (i + 1) / total,
                 text=f"Processing {i + 1} of {total}\u2003\u2014\u2003{name[:70]}",
             )
-            result, did_search = process_row(row, mapping, search_count)
-            if did_search:
-                search_count += 1
+            result = process_row(row, mapping)
             results.append(result)
 
         prog.empty()
