@@ -15,6 +15,7 @@ import json
 import re
 import csv
 import io
+from pathlib import Path
 from html import escape as he
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -72,6 +73,13 @@ DNB_THRESHOLD    = 300
 DEFAULT_INSTANCE = "https://sapconcur.my.salesforce.com"
 DEFAULT_REPORT   = "00OPg00000QbzTl"
 
+# ── Bundled territory files (committed alongside app.py) ──────────────────────
+_HERE            = Path(__file__).parent
+GB_TERRITORY_FILE  = _HERE / "2026-01-01 US General Business Territories.xlsx"
+NAT_TERRITORY_FILE = _HERE / "2026-01-01 US National Territories.xlsx"
+GB_SHEET_NAME      = "2026 GB Zip Assignments"
+NAT_SHEET_NAME     = "2026 Nat Zip Assignments"
+
 BAND_TO_SEGMENT = {
     "1-10":         "General Business",
     "11-50":        "General Business",
@@ -106,6 +114,8 @@ HINTS = {
                      "numberofemployees", "employees (d&b)"],
     "city":         ["billing city", "city"],
     "state":        ["billing state/province", "billing state", "state", "province"],
+    "zip":          ["billing zip/postal", "billing zip", "zip/postal", "postal code",
+                     "zip code", "zip", "postal"],
     "website":      ["account website", "website url", "website",
                      "web address", "web", "url", "domain"],
 }
@@ -240,18 +250,151 @@ def parse_report(data):
 # ── LinkedIn search URL builder ───────────────────────────────────────────────
 
 def linkedin_search_url(name):
-    """
-    Build a LinkedIn company search URL for manual review.
-    No API call — opens LinkedIn's own company search in a new tab.
-    """
+    """Build a LinkedIn company search URL for manual review."""
     return (
         "https://www.linkedin.com/search/results/companies/?"
         + urllib.parse.urlencode({"keywords": name})
     )
 
+# ── Territory file helpers ────────────────────────────────────────────────────
+
+def normalize_zip(val):
+    """Normalize to 5-digit zero-padded string. Handles ZIP+4 and integer zips."""
+    if val is None:
+        return ""
+    z = re.sub(r"[^0-9]", "", str(val).strip().split("-")[0])[:5]
+    return z.zfill(5) if z else ""
+
+def _parse_territory_wb(wb, sheet_name):
+    """
+    Extract {zip5: {"owner": ..., "owner_id": ..., "territory": ...}} from an
+    openpyxl workbook.  Falls back to the first sheet containing 'zip' if the
+    named sheet is not found.
+    """
+    if sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+    else:
+        ws = next(
+            (wb[s] for s in wb.sheetnames if "zip" in s.lower()),
+            wb.active,
+        )
+
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return {}, "Sheet is empty"
+
+    raw_hdr = [str(h).strip() if h is not None else "" for h in rows[0]]
+    hdr     = [h.lower() for h in raw_hdr]
+
+    def _col(needles):
+        for needle in needles:
+            for i, h in enumerate(hdr):
+                if needle in h:
+                    return i
+        return None
+
+    zip_idx  = _col(["zip code", "zip", "postal"])
+    own_idx  = _col(["fy26 account owner", "account owner name",
+                     "account owner", "rep name", "rep", "owner"])
+    # Exclude the owner-ID column when looking for owner name
+    if own_idx is not None and "id" in hdr[own_idx]:
+        own_idx = None
+        own_idx = _col(["fy26 account owner", "account owner name",
+                        "account owner", "rep name", "rep"])
+    id_idx   = _col(["owner id", "account owner id", "fy26 account owner id"])
+    terr_idx = _col(["territory name", "territory"])
+
+    if zip_idx is None or own_idx is None:
+        return {}, f"Could not find zip/owner columns. Headers: {raw_hdr}"
+
+    result = {}
+    for row in rows[1:]:
+        raw_zip = row[zip_idx] if zip_idx < len(row) else None
+        owner   = str(row[own_idx]).strip() if own_idx < len(row) and row[own_idx] else ""
+        z       = normalize_zip(raw_zip)
+        if not z or not owner or owner.lower() in ("none", "nan", ""):
+            continue
+        entry = {"owner": owner}
+        if id_idx is not None and id_idx < len(row) and row[id_idx]:
+            entry["owner_id"] = str(row[id_idx]).strip()
+        if terr_idx is not None and terr_idx < len(row) and row[terr_idx]:
+            entry["territory"] = str(row[terr_idx]).strip()
+        result[z] = entry
+
+    return result, None
+
+def load_territory_path(file_path, sheet_name):
+    """Load territory dict from a file path (used for bundled files)."""
+    try:
+        import openpyxl
+        wb     = openpyxl.load_workbook(str(file_path), read_only=True, data_only=True)
+        result, err = _parse_territory_wb(wb, sheet_name)
+        wb.close()
+        return result, err
+    except Exception as e:
+        return {}, str(e)
+
+def load_territory_upload(uploaded_file, sheet_name):
+    """Load territory dict from a Streamlit UploadedFile."""
+    if uploaded_file is None:
+        return {}, None
+    try:
+        import openpyxl
+        if uploaded_file.name.lower().endswith(".csv"):
+            content = uploaded_file.read().decode("utf-8-sig", errors="ignore")
+            reader  = csv.DictReader(io.StringIO(content))
+            raw_hdr = reader.fieldnames or []
+            rows_raw = list(reader)
+            # Convert to same format _parse_territory_wb expects — use a temp workaround
+            hdr     = [h.strip().lower() for h in raw_hdr]
+            def _col(needles):
+                for needle in needles:
+                    for i, h in enumerate(hdr):
+                        if needle in h: return raw_hdr[i]
+                return None
+            zip_col  = _col(["zip code", "zip", "postal"])
+            own_col  = _col(["fy26 account owner", "account owner name",
+                             "account owner", "rep name", "rep", "owner"])
+            id_col   = _col(["owner id"])
+            terr_col = _col(["territory name", "territory"])
+            if not zip_col or not own_col:
+                return {}, f"Could not find zip/owner columns in CSV. Headers: {raw_hdr}"
+            result = {}
+            for r in rows_raw:
+                z = normalize_zip(r.get(zip_col, ""))
+                owner = str(r.get(own_col, "")).strip()
+                if not z or not owner or owner.lower() in ("none","nan",""): continue
+                entry = {"owner": owner}
+                if id_col and r.get(id_col):   entry["owner_id"]  = r[id_col].strip()
+                if terr_col and r.get(terr_col): entry["territory"] = r[terr_col].strip()
+                result[z] = entry
+            return result, None
+        else:
+            wb     = openpyxl.load_workbook(
+                io.BytesIO(uploaded_file.read()), read_only=True, data_only=True
+            )
+            result, err = _parse_territory_wb(wb, sheet_name)
+            wb.close()
+            return result, err
+    except Exception as e:
+        return {}, str(e)
+
+def lookup_owner(zip_raw, territory_dict):
+    """Return formatted owner string for the given zip, or None if not found."""
+    if not zip_raw or not territory_dict:
+        return None
+    entry = territory_dict.get(normalize_zip(zip_raw))
+    if not entry:
+        return None
+    if isinstance(entry, dict):
+        owner     = entry.get("owner", "")
+        territory = entry.get("territory", "")
+        return f"{owner} \u2014 {territory}" if territory else owner
+    return str(entry)
+
 # ── Row processor ─────────────────────────────────────────────────────────────
 
-def process_row(row, mapping):
+def process_row(row, mapping, gb_dict=None, national_dict=None):
     name        = str(row.get(mapping.get("account_name") or "", "")).strip()
     current_raw = str(row.get(mapping.get("segment")      or "", "")).strip()
     current_seg = normalize_segment(current_raw)
@@ -260,10 +403,12 @@ def process_row(row, mapping):
     city        = str(row.get(mapping.get("city")    or "", "")).strip()
     state       = str(row.get(mapping.get("state")   or "", "")).strip()
     website     = str(row.get(mapping.get("website") or "", "")).strip()
+    zip_raw     = str(row.get(mapping.get("zip")     or "", "")).strip()
 
     rec = {
         "account_name":     name,
         "city":             city or "\u2014",
+        "state":            state or "\u2014",
         "current_segment":  current_raw,
         "dnb_employees":    dnb_raw or "\u2014",
         "expected_segment": "\u2014",
@@ -271,6 +416,7 @@ def process_row(row, mapping):
         "basis":            "\u2014",
         "linkedin_band":    "\u2014",
         "linkedin_url":     "",
+        "suggested_owner":  "\u2014",
     }
 
     if dnb_val is not None:
@@ -286,12 +432,30 @@ def process_row(row, mapping):
             if current_seg == normalize_segment(rec["expected_segment"])
             else "Incorrect"
         )
+        # Owner lookup only for incorrectly assigned accounts
+        if rec["status"] == "Incorrect":
+            correct_dict = (
+                national_dict if rec["expected_segment"] == "US National" else gb_dict
+            )
+            owner = lookup_owner(zip_raw, correct_dict)
+            rec["suggested_owner"] = (
+                owner if owner
+                else ("Zip not in territory file" if correct_dict else "\u2014")
+            )
 
     else:
-        # ── D&B unavailable → LinkedIn search link for manual review ──────────
+        # ── D&B unavailable → LinkedIn link + both territory owners ───────────
         rec["basis"]        = "No D\u0026B data \u2014 manual LinkedIn check needed"
         rec["linkedin_url"] = linkedin_search_url(name)
         rec["status"]       = "Needs Review"
+
+        if gb_dict or national_dict:
+            gb_owner  = lookup_owner(zip_raw, gb_dict)       or ("Zip not found" if gb_dict       else None)
+            nat_owner = lookup_owner(zip_raw, national_dict) or ("Zip not found" if national_dict else None)
+            parts = []
+            if gb_owner  is not None: parts.append(f"If GB: {gb_owner}")
+            if nat_owner is not None: parts.append(f"If National: {nat_owner}")
+            rec["suggested_owner"] = " \u2502 ".join(parts) if parts else "\u2014"
 
     return rec
 
@@ -317,12 +481,13 @@ def render_table(rows):
         )
         tbody += f"""<tr>
           <td>{he(r['account_name'])}</td>
-          <td>{he(str(r['city']))}</td>
+          <td>{he(str(r['city']))}, {he(str(r['state']))}</td>
           <td>{he(r['current_segment'])}</td>
           <td>{he(str(r['dnb_employees']))}</td>
           <td>{he(r['expected_segment'])}</td>
           <td>{badge_html(r['status'])}</td>
           <td>{he(r['basis'])}</td>
+          <td>{he(str(r.get('suggested_owner', '\u2014')))}</td>
           <td>{he(r['linkedin_band'])}</td>
           <td>{li_cell}</td>
         </tr>"""
@@ -330,9 +495,9 @@ def render_table(rows):
 <div style="overflow-x:auto">
 <table class="rtable">
   <thead><tr>
-    <th>Account Name</th><th>City</th><th>Current Segment</th><th>D&amp;B Employees</th>
+    <th>Account Name</th><th>City, State</th><th>Current Segment</th><th>D&amp;B Employees</th>
     <th>Expected Segment</th><th>Status</th><th>Basis</th>
-    <th>LinkedIn Band</th><th>LinkedIn Page</th>
+    <th>Suggested Owner</th><th>LinkedIn Band</th><th>LinkedIn Page</th>
   </tr></thead>
   <tbody>{tbody}</tbody>
 </table></div>""", unsafe_allow_html=True)
@@ -345,6 +510,7 @@ def col_preview_html(cols, rows, mapping):
         ("D&B Employees",   mapping.get("dnb")),
         ("City",            mapping.get("city")),
         ("State",           mapping.get("state")),
+        ("Zip",             mapping.get("zip")),
         ("Website",         mapping.get("website")),
     ]
     sample_rows = rows[:3]
@@ -395,6 +561,32 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# ── Auto-load bundled territory files ────────────────────────────────────────
+# Loaded once per session; file uploaders in Step 1 can override these.
+if "gb_dict" not in st.session_state:
+    if GB_TERRITORY_FILE.exists():
+        _d, _e = load_territory_path(GB_TERRITORY_FILE, GB_SHEET_NAME)
+        st.session_state["gb_dict"]      = _d
+        st.session_state["gb_dict_label"] = (
+            f"Auto-loaded: {GB_TERRITORY_FILE.name} ({len(_d):,} zip codes)"
+            if not _e else f"Load error: {_e}"
+        )
+    else:
+        st.session_state["gb_dict"]       = {}
+        st.session_state["gb_dict_label"] = "Not loaded"
+
+if "nat_dict" not in st.session_state:
+    if NAT_TERRITORY_FILE.exists():
+        _d, _e = load_territory_path(NAT_TERRITORY_FILE, NAT_SHEET_NAME)
+        st.session_state["nat_dict"]       = _d
+        st.session_state["nat_dict_label"] = (
+            f"Auto-loaded: {NAT_TERRITORY_FILE.name} ({len(_d):,} zip codes)"
+            if not _e else f"Load error: {_e}"
+        )
+    else:
+        st.session_state["nat_dict"]       = {}
+        st.session_state["nat_dict_label"] = "Not loaded"
+
 # ── Step 1: Connect ───────────────────────────────────────────────────────────
 st.markdown("**1. Connect to Salesforce**")
 
@@ -417,6 +609,54 @@ with c2:
         value=DEFAULT_REPORT,
         key="k_rid",
     )
+
+# Territory file status banner
+_gb_label  = st.session_state.get("gb_dict_label",  "Not loaded")
+_nat_label = st.session_state.get("nat_dict_label", "Not loaded")
+st.markdown(
+    f"<div style='background:#E8F5E9;border:1px solid #A5D6A7;border-radius:6px;"
+    f"padding:.5rem .9rem;font-size:.82rem;margin-top:.5rem;margin-bottom:.4rem'>"
+    f"<b>Territory files</b> &nbsp;&nbsp;"
+    f"<span style='color:#188918'>GB: {he(_gb_label)}</span>"
+    f"&nbsp;&nbsp;&bull;&nbsp;&nbsp;"
+    f"<span style='color:#188918'>National: {he(_nat_label)}</span>"
+    f"</div>",
+    unsafe_allow_html=True,
+)
+
+with st.expander("Override territory files (optional)", expanded=False):
+    tc1, tc2 = st.columns(2)
+    with tc1:
+        gb_file = st.file_uploader(
+            "General Business Territory (CSV or XLSX)",
+            type=["csv", "xlsx"],
+            key="k_gb_file",
+        )
+    with tc2:
+        nat_file = st.file_uploader(
+            "US National Territory (CSV or XLSX)",
+            type=["csv", "xlsx"],
+            key="k_nat_file",
+        )
+    # Re-parse only when a new file is uploaded
+    for fkey, skey, sheet in [
+        ("k_gb_file",  "gb_dict",  GB_SHEET_NAME),
+        ("k_nat_file", "nat_dict", NAT_SHEET_NAME),
+    ]:
+        f = st.session_state.get(fkey)
+        if f is not None:
+            cache_key = f"{skey}_upload_id"
+            file_id   = f"{f.name}_{f.size}"
+            if st.session_state.get(cache_key) != file_id:
+                d, err = load_territory_upload(f, sheet)
+                if err:
+                    st.error(f"Could not read {f.name}: {err}")
+                else:
+                    label_key = f"{skey}_label"
+                    st.session_state[skey]       = d
+                    st.session_state[label_key]  = f"Override: {f.name} ({len(d):,} zip codes)"
+                    st.session_state[cache_key]  = file_id
+                    st.success(f"Loaded {f.name} — {len(d):,} zip codes.")
 
 if st.button("Load Report", key="btn_load"):
     if not session_id:
@@ -451,7 +691,7 @@ if st.session_state.get("rows"):
         return cols.index(val) if val in cols else 0
 
     c1, c2, c3 = st.columns(3)
-    c4, c5, c6 = st.columns(3)
+    c4, c5, c6, c7 = st.columns(4)
 
     with c1:
         acct_col = st.selectbox(
@@ -479,6 +719,11 @@ if st.session_state.get("rows"):
             index=_idx(opt, auto_detect(col_labels, "state", rows, required=False)),
         )
     with c6:
+        zip_col = st.selectbox(
+            "Billing Zip", opt,
+            index=_idx(opt, auto_detect(col_labels, "zip", rows, required=False)),
+        )
+    with c7:
         web_col = st.selectbox(
             "Website", opt,
             index=_idx(opt, auto_detect(col_labels, "website", rows, required=False)),
@@ -490,6 +735,7 @@ if st.session_state.get("rows"):
         "dnb":          dnb_col,
         "city":         None if city_col  == "(not available)" else city_col,
         "state":        None if state_col == "(not available)" else state_col,
+        "zip":          None if zip_col   == "(not available)" else zip_col,
         "website":      None if web_col   == "(not available)" else web_col,
     }
 
@@ -519,7 +765,11 @@ if st.session_state.get("rows"):
                 (i + 1) / total,
                 text=f"Processing {i + 1} of {total}\u2003\u2014\u2003{name[:70]}",
             )
-            result = process_row(row, mapping)
+            result = process_row(
+                row, mapping,
+                gb_dict=st.session_state.get("gb_dict", {}),
+                national_dict=st.session_state.get("nat_dict", {}),
+            )
             results.append(result)
 
         prog.empty()
@@ -553,8 +803,9 @@ if st.session_state.get("results"):
     st.write("")
     buf    = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=[
-        "account_name", "city", "current_segment", "dnb_employees",
-        "expected_segment", "status", "basis", "linkedin_band", "linkedin_url",
+        "account_name", "city", "state", "current_segment", "dnb_employees",
+        "expected_segment", "status", "basis", "suggested_owner",
+        "linkedin_band", "linkedin_url",
     ])
     writer.writeheader()
     writer.writerows(results)
