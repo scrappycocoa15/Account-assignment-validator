@@ -271,7 +271,6 @@ def process_row(row, mapping):
         "linkedin_band":    "\u2014",
         "linkedin_url":     "",
     }
-    did_search = False
 
     if dnb_val is not None:
         # ── ROE path — D&B present at any value ───────────────────────────────
@@ -293,7 +292,7 @@ def process_row(row, mapping):
         rec["linkedin_url"] = linkedin_search_url(name)
         rec["status"]       = "Needs Review"
 
-    return rec, did_search
+    return rec
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
 
