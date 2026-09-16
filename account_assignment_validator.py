@@ -70,7 +70,6 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
 # ── Constants ─────────────────────────────────────────────────────────────────
 SFDC_API_VERSION = "v59.0"
 DNB_THRESHOLD    = 300
-DNB_MIN_RELIABLE = 10          # D&B counts below this are treated as unreliable
 DDG_SEARCH_URL   = "https://html.duckduckgo.com/html/"
 DDG_DELAY        = 1.2         # seconds between DDG requests (be respectful)
 DEFAULT_INSTANCE = "https://sapconcur.my.salesforce.com"
@@ -367,12 +366,8 @@ def process_row(row, mapping, search_count):
     }
     did_search = False
 
-    # Decide if D&B is usable
-    dnb_usable = (dnb_val is not None) and (dnb_val >= DNB_MIN_RELIABLE)
-    dnb_low    = (dnb_val is not None) and (dnb_val < DNB_MIN_RELIABLE)
-
-    if dnb_usable:
-        # ── Standard ROE path ─────────────────────────────────────────────────
+    if dnb_val is not None:
+        # ── Standard ROE path — D&B present at any value ──────────────────────
         if dnb_val >= DNB_THRESHOLD:
             rec["expected_segment"] = "US National"
             rec["basis"]            = f"D\u0026B: {dnb_val:,} \u2265 {DNB_THRESHOLD}"
@@ -386,14 +381,8 @@ def process_row(row, mapping, search_count):
         )
 
     else:
-        # ── No D&B or unreliable D&B → LinkedIn enrichment via DuckDuckGo ────
-        if dnb_low:
-            rec["basis"] = (
-                f"D\u0026B count unreliable ({dnb_val} < {DNB_MIN_RELIABLE})"
-                f" \u2014 using LinkedIn"
-            )
-        else:
-            rec["basis"] = "No D\u0026B data \u2014 using LinkedIn"
+        # ── D&B unavailable → LinkedIn enrichment via DuckDuckGo ─────────────
+        rec["basis"] = "No D\u0026B data \u2014 using LinkedIn"
 
         # Rate-limit DuckDuckGo requests
         if search_count > 0:
@@ -518,7 +507,7 @@ st.markdown("""
   <b>ROE:</b>
   D&amp;B &ge; 300 &rarr; <b>US National</b> &nbsp;|&nbsp;
   D&amp;B &lt; 300 &rarr; <b>General Business</b> &nbsp;|&nbsp;
-  D&amp;B &lt; 10 (unreliable) or missing &rarr; LinkedIn band above 201&ndash;500
+  D&amp;B unavailable &rarr; LinkedIn band above 201&ndash;500
   &rarr; <b>US National</b>, rest &rarr; <b>General Business</b>
   &nbsp;&nbsp;<span style="color:#6A7275">
   &bull; LinkedIn enrichment uses DuckDuckGo search &mdash; no API key required
