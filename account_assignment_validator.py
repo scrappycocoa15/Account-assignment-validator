@@ -263,6 +263,7 @@ def process_row(row, mapping):
 
     rec = {
         "account_name":     name,
+        "city":             city or "\u2014",
         "current_segment":  current_raw,
         "dnb_employees":    dnb_raw or "\u2014",
         "expected_segment": "\u2014",
@@ -316,6 +317,7 @@ def render_table(rows):
         )
         tbody += f"""<tr>
           <td>{he(r['account_name'])}</td>
+          <td>{he(str(r['city']))}</td>
           <td>{he(r['current_segment'])}</td>
           <td>{he(str(r['dnb_employees']))}</td>
           <td>{he(r['expected_segment'])}</td>
@@ -328,7 +330,7 @@ def render_table(rows):
 <div style="overflow-x:auto">
 <table class="rtable">
   <thead><tr>
-    <th>Account Name</th><th>Current Segment</th><th>D&amp;B Employees</th>
+    <th>Account Name</th><th>City</th><th>Current Segment</th><th>D&amp;B Employees</th>
     <th>Expected Segment</th><th>Status</th><th>Basis</th>
     <th>LinkedIn Band</th><th>LinkedIn Page</th>
   </tr></thead>
@@ -551,7 +553,7 @@ if st.session_state.get("results"):
     st.write("")
     buf    = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=[
-        "account_name", "current_segment", "dnb_employees",
+        "account_name", "city", "current_segment", "dnb_employees",
         "expected_segment", "status", "basis", "linkedin_band", "linkedin_url",
     ])
     writer.writeheader()
