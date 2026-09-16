@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
 Account Assignment Validator
-Streamlit Cloud compatible. Dependencies: streamlit only. All API calls via stdlib urllib.
+Streamlit Cloud compatible — only dependency is streamlit (stdlib used for all HTTP calls).
+Deploy: push app.py + requirements.txt to GitHub, connect to Streamlit Cloud.
+Run locally: streamlit run app.py
 """
 
 import streamlit as st
@@ -16,42 +18,43 @@ import io
 from html import escape as he
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Account Assignment Validator", layout="wide")
+st.set_page_config(
+    page_title="Account Assignment Validator",
+    layout="wide",
+    page_icon="📋",
+)
 
-# ── SAP light-mode styling ────────────────────────────────────────────────────
+# ── SAP Light Mode styling ────────────────────────────────────────────────────
 st.markdown("""
 <style>
 * { font-family: '72','72full',Arial,Helvetica,sans-serif !important; }
 section.main > div { padding-top: 1rem; }
 div[data-testid="stMetric"] {
-    background:#F5F6F7; border:1px solid #E1E2E6;
-    border-radius:8px; padding:.8rem 1rem;
+    background: #F5F6F7; border: 1px solid #E1E2E6;
+    border-radius: 8px; padding: .8rem 1rem;
 }
-div[data-testid="stMetric"] label {
-    font-size:.78rem !important; color:#6A7275 !important;
-}
-div[data-testid="stMetricValue"] > div {
+div[data-testid="stMetric"] label { font-size:.78rem !important; color:#6A7275 !important; }
+div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
     font-size:1.6rem !important; font-weight:700 !important; color:#0070F2 !important;
 }
 .stButton > button {
     background:#0070F2 !important; color:white !important;
     border:none !important; border-radius:4px !important; font-weight:600 !important;
 }
-.stButton > button:hover { background:#0057C2 !important; }
+.stButton > button:hover  { background:#0057C2 !important; }
+.stButton > button:disabled { background:#BCC0C5 !important; cursor:not-allowed !important; }
 .stDownloadButton > button {
     background:white !important; color:#0070F2 !important;
     border:2px solid #0070F2 !important; border-radius:4px !important; font-weight:600 !important;
 }
-div[data-testid="stProgress"] > div > div { background-color:#0070F2 !important; }
-.badge {
-    display:inline-block; padding:.2rem .55rem;
-    border-radius:4px; font-size:.76rem; font-weight:600; white-space:nowrap;
-}
-.bc { background:#E8F5E9; color:#188918; }
-.bi { background:#FFEBEE; color:#BB0000; }
-.bl { background:#E1F4FF; color:#0057C2; }
-.br { background:#FFF3E0; color:#E76500; }
-.bg { background:#EAECEE; color:#6A7275; }
+.stProgress > div > div > div { background-color:#0070F2 !important; }
+.badge { display:inline-block; padding:.18rem .5rem; border-radius:4px;
+         font-size:.78rem; font-weight:600; white-space:nowrap; }
+.bc  { background:#E8F5E9; color:#188918; }
+.bi  { background:#FFEBEE; color:#BB0000; }
+.bl  { background:#E1F4FF; color:#0057C2; }
+.br  { background:#FFF3E0; color:#E76500; }
+.bg  { background:#EAECEE; color:#6A7275; }
 .rtable { width:100%; border-collapse:collapse; font-size:.84rem; }
 .rtable th {
     background:#0070F2; color:white; padding:.6rem .9rem;
@@ -66,12 +69,12 @@ div[data-testid="stProgress"] > div > div { background-color:#0070F2 !important;
 """, unsafe_allow_html=True)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-SFDC_API_VERSION  = "v59.0"
-DNB_THRESHOLD     = 300
-BING_ENDPOINT     = "https://api.bing.microsoft.com/v7.0/search"
-BING_DELAY        = 0.4
-DEFAULT_INSTANCE  = "https://sapconcur.my.salesforce.com"
-DEFAULT_REPORT    = "00OPg00000QbzTl"
+SFDC_API_VERSION = "v59.0"
+DNB_THRESHOLD    = 300
+BING_ENDPOINT    = "https://api.bing.microsoft.com/v7.0/search"
+BING_DELAY       = 0.4
+DEFAULT_INSTANCE = "https://sapconcur.my.salesforce.com"
+DEFAULT_REPORT   = "00OPg00000QbzTl"
 
 BAND_TO_SEGMENT = {
     "1-10":         "General Business",
@@ -85,24 +88,29 @@ BAND_TO_SEGMENT = {
 }
 
 BAND_PATTERNS = [
-    (r"10[,.]?001\+?\s+employees?",               "10,001+"),
-    (r"5[,.]?001\s*[-–]\s*10[,.]?000\s+employees?", "5,001-10,000"),
-    (r"1[,.]?001\s*[-–]\s*5[,.]?000\s+employees?",  "1,001-5,000"),
-    (r"501\s*[-–]\s*1[,.]?000\s+employees?",        "501-1,000"),
-    (r"201\s*[-–]\s*500\s+employees?",              "201-500"),
-    (r"51\s*[-–]\s*200\s+employees?",               "51-200"),
-    (r"11\s*[-–]\s*50\s+employees?",                "11-50"),
-    (r"\b1\s*[-–]\s*10\s+employees?",               "1-10"),
+    (r"10[,.]?001\+?\s+employees?",                    "10,001+"),
+    (r"5[,.]?001\s*[-\u2013]\s*10[,.]?000\s+employees?", "5,001-10,000"),
+    (r"1[,.]?001\s*[-\u2013]\s*5[,.]?000\s+employees?",  "1,001-5,000"),
+    (r"501\s*[-\u2013]\s*1[,.]?000\s+employees?",         "501-1,000"),
+    (r"201\s*[-\u2013]\s*500\s+employees?",               "201-500"),
+    (r"51\s*[-\u2013]\s*200\s+employees?",                "51-200"),
+    (r"11\s*[-\u2013]\s*50\s+employees?",                 "11-50"),
+    (r"\b1\s*[-\u2013]\s*10\s+employees?",                "1-10"),
 ]
 
+# Hints ordered most-specific → least-specific
 HINTS = {
-    "account_name": ["account name", "account", "name"],
-    "segment":      ["segment", "assignment", "territory", "sales segment"],
-    "dnb":          ["d&b", "dnb", "dun", "employee worldwide", "employees (d&b)",
-                     "numberofemployees", "employees"],
+    "account_name": ["account name", "company name", "name"],
+    "segment":      ["us market segment", "market segment", "sales segment",
+                     "account segment", "segment", "territory", "assignment"],
+    "dnb":          ["d&b employees worldwide", "d&b employee worldwide",
+                     "employees worldwide", "d&b employees", "dnb employees",
+                     "employee worldwide", "d&b", "dnb", "dun",
+                     "numberofemployees", "employees (d&b)"],
     "city":         ["billing city", "city"],
-    "state":        ["billing state", "state", "province"],
-    "website":      ["website", "web", "domain"],
+    "state":        ["billing state/province", "billing state", "state", "province"],
+    "website":      ["account website", "website url", "website", "web address",
+                     "web", "url", "domain"],
 }
 
 # ── Helper functions ──────────────────────────────────────────────────────────
@@ -137,12 +145,28 @@ def extract_band(text):
     return None
 
 def auto_detect(cols, field, required=True):
-    hints = HINTS.get(field, [])
-    for col in cols:
-        for h in hints:
+    """
+    Iterate hints most-specific-first; for account_name and segment skip ID columns.
+    Falls back to first non-ID column (required) or '(not available)' (optional).
+    """
+    hints      = HINTS.get(field, [])
+    id_pat     = re.compile(r'\bid\b', re.IGNORECASE)
+    skip_ids   = field in ("account_name", "segment")
+
+    for h in hints:
+        for col in cols:
+            if skip_ids and id_pat.search(col):
+                continue
             if h in col.lower():
                 return col
-    return cols[0] if (required and cols) else "(not available)"
+
+    if required and cols:
+        if skip_ids:
+            for col in cols:
+                if not id_pat.search(col):
+                    return col
+        return cols[0]
+    return "(not available)"
 
 # ── Salesforce API ────────────────────────────────────────────────────────────
 
@@ -166,7 +190,7 @@ def fetch_sfdc_report(instance_url, session_id, report_id):
             raise Exception("Access denied. Check that you have permission to run this report.")
         if e.code == 404:
             raise Exception(f"Report {report_id} not found. Verify the Report ID.")
-        raise Exception(f"Salesforce error {e.code}: {body[:300]}")
+        raise Exception(f"Salesforce error {e.code}: {body[:200]}")
     except urllib.error.URLError as e:
         raise Exception(f"Cannot reach Salesforce: {e.reason}")
 
@@ -175,43 +199,42 @@ def parse_report(data):
     api_names = meta.get("detailColumns", [])
     col_info  = data.get("reportExtendedMetadata", {}).get("detailColumnInfo", {})
     labels    = [col_info.get(n, {}).get("label", n) for n in api_names]
-
-    rows_raw = data.get("factMap", {}).get("T!T", {}).get("rows", [])
+    rows_raw  = data.get("factMap", {}).get("T!T", {}).get("rows", [])
     if not rows_raw:
         raise Exception(
-            "No rows returned. Make sure the report is Tabular format "
-            "and contains data for the filters applied."
+            "No rows found. Make sure the report is Tabular format "
+            "and contains data for the current year."
         )
     rows = []
     for row in rows_raw:
         cells = row.get("dataCells", [])
-        rows.append(
-            {lbl: (cells[i].get("label", "") if i < len(cells) else "")
-             for i, lbl in enumerate(labels)}
-        )
+        rows.append({
+            lbl: (cells[i].get("label", "") if i < len(cells) else "")
+            for i, lbl in enumerate(labels)
+        })
     return rows, labels
 
-# ── Bing enrichment ───────────────────────────────────────────────────────────
+# ── Bing / LinkedIn enrichment ────────────────────────────────────────────────
 
 def search_bing_linkedin(name, city, state, website, api_key):
     parts = [f'site:linkedin.com/company "{name}"']
-    if city:
-        parts.append(str(city))
-    if state:
-        parts.append(str(state))
+    if city:    parts.append(str(city))
+    if state:   parts.append(str(state))
     if website:
         domain = re.sub(r"https?://(www\.)?", "", str(website)).split("/")[0]
         if domain:
             parts.append(domain)
 
     query = " ".join(parts)
-    url   = BING_ENDPOINT + "?" + urllib.parse.urlencode({"q": query, "count": 5, "mkt": "en-US"})
-    req   = urllib.request.Request(url, headers={"Ocp-Apim-Subscription-Key": api_key})
-
+    url   = BING_ENDPOINT + "?" + urllib.parse.urlencode(
+        {"q": query, "count": 5, "mkt": "en-US"}
+    )
+    req = urllib.request.Request(
+        url, headers={"Ocp-Apim-Subscription-Key": api_key}
+    )
     try:
         with urllib.request.urlopen(req, timeout=12) as resp:
             data = json.loads(resp.read())
-
         for r in data.get("webPages", {}).get("value", []):
             r_url   = r.get("url", "")
             snippet = r.get("snippet", "")
@@ -224,9 +247,7 @@ def search_bing_linkedin(name, city, state, website, api_key):
             ):
                 band = extract_band(snippet + " " + title)
                 return r_url, band, None
-
         return None, None, "No LinkedIn company page found"
-
     except urllib.error.HTTPError as e:
         if e.code == 401:
             return None, None, "Invalid Bing API key"
@@ -234,17 +255,17 @@ def search_bing_linkedin(name, city, state, website, api_key):
     except Exception as e:
         return None, None, str(e)
 
-# ── ROE processing ────────────────────────────────────────────────────────────
+# ── Row processing ────────────────────────────────────────────────────────────
 
 def process_row(row, mapping, bing_key, bing_count):
     name        = str(row.get(mapping.get("account_name") or "", "")).strip()
     current_raw = str(row.get(mapping.get("segment")      or "", "")).strip()
     current_seg = normalize_segment(current_raw)
-    dnb_raw     = str(row.get(mapping.get("dnb")          or "", "")).strip() if mapping.get("dnb")     else ""
+    dnb_raw     = str(row.get(mapping.get("dnb") or "", "")).strip() if mapping.get("dnb") else ""
     dnb_val     = parse_number(dnb_raw)
-    city        = str(row.get(mapping.get("city")         or "", "")).strip() if mapping.get("city")    else ""
-    state       = str(row.get(mapping.get("state")        or "", "")).strip() if mapping.get("state")   else ""
-    website     = str(row.get(mapping.get("website")      or "", "")).strip() if mapping.get("website") else ""
+    city        = str(row.get(mapping.get("city")    or "", "")).strip() if mapping.get("city")    else ""
+    state       = str(row.get(mapping.get("state")   or "", "")).strip() if mapping.get("state")   else ""
+    website     = str(row.get(mapping.get("website") or "", "")).strip() if mapping.get("website") else ""
 
     rec = {
         "account_name":    name,
@@ -261,46 +282,42 @@ def process_row(row, mapping, bing_key, bing_count):
     if dnb_val is not None:
         if dnb_val >= DNB_THRESHOLD:
             rec["expected_segment"] = "US National"
-            rec["basis"]            = f"D\u0026B: {dnb_val:,} \u2265 {DNB_THRESHOLD}"
+            rec["basis"]            = f"D&B: {dnb_val:,} \u2265 {DNB_THRESHOLD}"
         else:
             rec["expected_segment"] = "General Business"
-            rec["basis"]            = f"D\u0026B: {dnb_val:,} < {DNB_THRESHOLD}"
-
+            rec["basis"]            = f"D&B: {dnb_val:,} < {DNB_THRESHOLD}"
         rec["status"] = (
             "Correct" if current_seg == normalize_segment(rec["expected_segment"])
             else "Incorrect"
         )
-
     else:
-        rec["basis"] = "No D\u0026B data"
-
+        rec["basis"] = "No D&B data"
         if bing_key:
             if bing_count > 0:
                 time.sleep(BING_DELAY)
-
             li_url, li_band, err = search_bing_linkedin(name, city, state, website, bing_key)
             did_bing = True
-
             if li_url:
                 rec["linkedin_url"] = li_url
                 if li_band:
-                    expected              = BAND_TO_SEGMENT.get(li_band, "\u2014")
-                    rec["linkedin_band"]  = li_band
+                    expected               = BAND_TO_SEGMENT.get(li_band, "\u2014")
+                    rec["linkedin_band"]   = li_band
                     rec["expected_segment"] = expected
-                    rec["basis"]          = f"LinkedIn band: {li_band}"
-                    rec["status"]         = (
-                        "Correct (LinkedIn)" if current_seg == normalize_segment(expected)
+                    rec["basis"]           = f"LinkedIn band: {li_band}"
+                    rec["status"]          = (
+                        "Correct (LinkedIn)"
+                        if current_seg == normalize_segment(expected)
                         else "Incorrect (LinkedIn)"
                     )
                 else:
                     rec["status"] = "Needs Review"
-                    rec["basis"]  = "LinkedIn URL found \u2014 band not in snippet"
+                    rec["basis"]  = "LinkedIn found \u2014 band not in snippet"
             else:
                 rec["status"] = "Data Gap"
                 rec["basis"]  = err or "No LinkedIn match found"
         else:
             rec["status"] = "Data Gap"
-            rec["basis"]  = "No D\u0026B data; no Bing API key provided"
+            rec["basis"]  = "No D&B data; add Bing API key to enable LinkedIn enrichment"
 
     return rec, did_bing
 
@@ -326,13 +343,13 @@ def render_table(rows):
         )
         tbody += f"""
         <tr>
-          <td>{he(r['account_name'])}</td>
-          <td>{he(r['current_segment'])}</td>
-          <td>{he(str(r['dnb_employees']))}</td>
-          <td>{he(r['expected_segment'])}</td>
-          <td>{badge_html(r['status'])}</td>
-          <td>{he(r['basis'])}</td>
-          <td>{he(r['linkedin_band'])}</td>
+          <td>{he(r["account_name"])}</td>
+          <td>{he(r["current_segment"])}</td>
+          <td>{he(str(r["dnb_employees"]))}</td>
+          <td>{he(r["expected_segment"])}</td>
+          <td>{badge_html(r["status"])}</td>
+          <td>{he(r["basis"])}</td>
+          <td>{he(r["linkedin_band"])}</td>
           <td>{li_cell}</td>
         </tr>"""
     st.markdown(f"""
@@ -349,7 +366,6 @@ def render_table(rows):
 
 # ── App layout ────────────────────────────────────────────────────────────────
 
-# Header
 st.markdown("""
 <div style="background:#0070F2;color:white;padding:1.2rem 1.6rem;
             border-radius:8px;margin-bottom:1rem">
@@ -357,51 +373,38 @@ st.markdown("""
     Account Assignment Validator
   </div>
   <div style="font-size:.88rem;opacity:.85;margin-top:.25rem">
-    US SMB &middot; ROE validation via D&amp;B employee count
-    and LinkedIn band enrichment
+    US SMB &middot; ROE validation via D&amp;B employee count and LinkedIn band enrichment
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-# ROE summary
 st.markdown("""
 <div style="background:#E1F4FF;border:1px solid #4CB1FF;border-radius:6px;
             padding:.7rem 1rem;font-size:.84rem;margin-bottom:1.2rem">
   <b>ROE:</b>
   D&amp;B &ge; 300 &rarr; <b>US National</b> &nbsp;|&nbsp;
   D&amp;B &lt; 300 &rarr; <b>General Business</b> &nbsp;|&nbsp;
-  No D&amp;B &rarr; LinkedIn band above 201&ndash;500
-  (501&ndash;1,000 and above) &rarr; <b>US National</b>,
+  No D&amp;B: LinkedIn band above 201&ndash;500 (501+ and above) &rarr; <b>US National</b>,
   rest &rarr; <b>General Business</b>
 </div>
 """, unsafe_allow_html=True)
 
-# ── Step 1: Connect ───────────────────────────────────────────────────────────
+# ── Step 1 ────────────────────────────────────────────────────────────────────
 st.markdown("**1. Connect to Salesforce**")
 
 c1, c2 = st.columns(2)
 with c1:
-    instance_url = st.text_input(
-        "Salesforce Instance URL",
-        value=DEFAULT_INSTANCE,
-        key="k_instance",
-    )
-    session_id = st.text_input(
-        "Session ID",
-        type="password",
-        placeholder="Paste your Salesforce Session ID here",
-        key="k_sid",
+    instance_url = st.text_input("Salesforce Instance URL", value=DEFAULT_INSTANCE, key="k_instance")
+    session_id   = st.text_input(
+        "Session ID", type="password",
+        placeholder="Paste your Salesforce Session ID here", key="k_sid",
     )
 with c2:
-    report_id = st.text_input(
-        "Report ID",
-        value=DEFAULT_REPORT,
-        key="k_rid",
-    )
-    bing_key = st.text_input(
+    report_id = st.text_input("Report ID", value=DEFAULT_REPORT, key="k_rid")
+    bing_key  = st.text_input(
         "Bing Web Search API Key",
         type="password",
-        placeholder="Optional \u2014 required for LinkedIn enrichment on accounts without D\u0026B",
+        placeholder="Optional \u2014 required for LinkedIn enrichment on accounts without D&B",
         key="k_bing",
     )
 
@@ -409,79 +412,69 @@ if st.button("Load Report", key="btn_load"):
     if not session_id:
         st.error("Paste your Salesforce Session ID to continue.")
     else:
-        with st.spinner("Connecting to Salesforce..."):
+        with st.spinner("Connecting to Salesforce\u2026"):
             try:
-                raw_data        = fetch_sfdc_report(instance_url, session_id, report_id)
+                raw_data         = fetch_sfdc_report(instance_url, session_id, report_id)
                 rows, col_labels = parse_report(raw_data)
-                report_name     = raw_data.get("reportMetadata", {}).get("name", "Report")
-
+                report_name      = raw_data.get("reportMetadata", {}).get("name", "Report")
                 st.session_state["rows"]        = rows
                 st.session_state["col_labels"]  = col_labels
                 st.session_state["report_name"] = report_name
-                st.session_state["results"]     = None  # clear previous results
-
-                st.success(
-                    f"Loaded **{report_name}** \u2014 {len(rows):,} accounts."
-                )
+                st.session_state["results"]     = None
+                st.success(f"Loaded **{report_name}** \u2014 {len(rows):,} accounts.")
             except Exception as e:
                 st.error(str(e))
 
-# ── Step 2: Column mapping ────────────────────────────────────────────────────
+# ── Step 2 ────────────────────────────────────────────────────────────────────
 if st.session_state.get("rows"):
     rows       = st.session_state["rows"]
     col_labels = st.session_state["col_labels"]
     opt        = ["(not available)"] + col_labels
 
     st.markdown("**2. Map Report Columns**")
-    st.caption(
-        "Fields auto-detected from column names. "
-        "Adjust the dropdowns if your labels differ."
-    )
+    st.caption("Fields auto-detected from column names. Adjust the dropdowns if your labels differ.")
 
-    def _idx(cols, detected):
-        return cols.index(detected) if detected in cols else 0
+    def _idx(lst, val):
+        return lst.index(val) if val in lst else 0
 
     c1, c2, c3 = st.columns(3)
     c4, c5, c6 = st.columns(3)
 
     with c1:
         acct_col = st.selectbox(
-            "Account Name \u2733",
-            col_labels,
+            "Account Name \u2733", col_labels,
             index=_idx(col_labels, auto_detect(col_labels, "account_name")),
+            key="k_acct",
         )
     with c2:
         seg_col = st.selectbox(
-            "Current Segment \u2733",
-            col_labels,
+            "Current Segment \u2733", col_labels,
             index=_idx(col_labels, auto_detect(col_labels, "segment")),
+            key="k_seg",
         )
     with c3:
         dnb_col = st.selectbox(
-            "D\u0026B Employee Worldwide \u2733",
-            col_labels,
+            "D&B Employee Worldwide \u2733", col_labels,
             index=_idx(col_labels, auto_detect(col_labels, "dnb")),
+            key="k_dnb",
         )
     with c4:
-        det_city = auto_detect(col_labels, "city", required=False)
         city_col = st.selectbox(
-            "Billing City",
-            opt,
-            index=_idx(opt, det_city),
+            "Billing City", opt,
+            index=_idx(opt, auto_detect(col_labels, "city", required=False)),
+            key="k_city",
         )
     with c5:
-        det_state = auto_detect(col_labels, "state", required=False)
         state_col = st.selectbox(
-            "Billing State",
-            opt,
-            index=_idx(opt, det_state),
+            "Billing State", opt,
+            index=_idx(opt, auto_detect(col_labels, "state", required=False)),
+            key="k_state",
         )
     with c6:
-        det_web = auto_detect(col_labels, "website", required=False)
         web_col = st.selectbox(
-            "Website",
-            opt,
-            index=_idx(opt, det_web),
+            "Website", opt,
+            index=_idx(opt, auto_detect(col_labels, "website", required=False)),
+            key="k_web",
         )
 
     mapping = {
@@ -493,7 +486,27 @@ if st.session_state.get("rows"):
         "website":      None if web_col   == "(not available)" else web_col,
     }
 
-    if st.button("Validate Assignments", key="btn_validate"):
+    # Validate: same column mapped to two fields
+    duplicate = acct_col == seg_col or acct_col == dnb_col or seg_col == dnb_col
+    if acct_col == seg_col:
+        st.error(
+            f"\u26a0\ufe0f **Account Name** and **Current Segment** are both mapped to "
+            f"**{acct_col}**. Every account will appear Incorrect. "
+            f"Select a different column for each field."
+        )
+    elif acct_col == dnb_col or seg_col == dnb_col:
+        st.warning("Two required fields share the same column. Check the mappings above.")
+
+    # Bing key notice
+    if not bing_key:
+        st.info(
+            "\u2139\ufe0f **No Bing API key entered.** "
+            "Accounts that have no D&B employee count will be marked **Data Gap** "
+            "and no LinkedIn band or suggested assignment will be shown. "
+            "Add a Bing Web Search API key in Step\u00a01 to enable LinkedIn enrichment."
+        )
+
+    if st.button("Validate Assignments", key="btn_validate", disabled=duplicate):
         results    = []
         bing_count = 0
         total      = len(rows)
@@ -513,10 +526,9 @@ if st.session_state.get("rows"):
         prog.empty()
         st.session_state["results"] = results
 
-# ── Step 3: Results ───────────────────────────────────────────────────────────
+# ── Step 3 ────────────────────────────────────────────────────────────────────
 if st.session_state.get("results"):
     results = st.session_state["results"]
-
     st.markdown("**3. Validation Results**")
 
     total   = len(results)
@@ -526,22 +538,19 @@ if st.session_state.get("results"):
     pct     = lambda n: f"{round(n / total * 100)}%" if total else "0%"
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Accounts",        total)
-    m2.metric("Correctly Assigned",    f"{correct} ({pct(correct)})")
-    m3.metric("Incorrectly Assigned",  f"{wrong}   ({pct(wrong)})")
-    m4.metric("Data Gap / Review",     f"{gap}     ({pct(gap)})")
+    m1.metric("Total Accounts",       total)
+    m2.metric("Correctly Assigned",   f"{correct} ({pct(correct)})")
+    m3.metric("Incorrectly Assigned", f"{wrong} ({pct(wrong)})")
+    m4.metric("Data Gap / Review",    f"{gap} ({pct(gap)})")
 
     st.write("")
-
     all_statuses = ["All"] + sorted({r["status"] for r in results})
     sel          = st.selectbox("Filter by Status", all_statuses, key="k_filter")
     filtered     = results if sel == "All" else [r for r in results if r["status"] == sel]
-
     st.caption(f"Showing {len(filtered):,} of {total:,} accounts")
     render_table(filtered)
 
     st.write("")
-
     buf = io.StringIO()
     writer = csv.DictWriter(
         buf,
@@ -553,7 +562,6 @@ if st.session_state.get("results"):
     )
     writer.writeheader()
     writer.writerows(results)
-
     st.download_button(
         label="Download Results as CSV",
         data=buf.getvalue(),
