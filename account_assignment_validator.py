@@ -134,7 +134,7 @@ def normalize_segment(s):
     if not s: return ""
     sl = str(s).lower().strip()
     if re.search(r"\bnational\b|\bnats?\b", sl):            return "US National"
-    if re.search(r"\bgeneral\s+business\b|\bgb\b|\bsmb\b|\bgen\s+bus\b", sl): return "General Business"
+    if re.search(r"\bgeneral\s+business\b|\bsmall\s+business\b|\bgb\b|\bsmb\b|\bgen\s+bus\b", sl): return "General Business"
     return str(s).strip()
 
 def parse_number(val):
