@@ -514,13 +514,13 @@ st.markdown("""
 # ── Step 1: Connect ───────────────────────────────────────────────────────────
 st.markdown("**1. Connect to Salesforce**")
 
-c1, c2 = st.columns(2)
+c1, c2 = st.columns([3, 1])
 with c1:
     instance_url = st.text_input("Salesforce Instance URL", value=DEFAULT_INSTANCE, key="k_instance")
-    session_id   = st.text_input("Session ID", type="password",
-                                 placeholder="Paste your Salesforce Session ID here", key="k_sid")
 with c2:
     report_id = st.text_input("Report ID", value=DEFAULT_REPORT, key="k_rid")
+session_id = st.text_input("Session ID", type="password",
+                            placeholder="Paste your Salesforce Session ID here", key="k_sid")
 
 # Territory status banner
 _gb_label  = st.session_state.get("gb_dict_label",  "Not loaded")
@@ -536,7 +536,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-with st.expander("Override territory files"):
+if st.toggle("Update territory files", key="k_terr_toggle"):
     oc1, oc2 = st.columns(2)
     with oc1:
         gb_upload = st.file_uploader("General Business Territory", type=["csv","xlsx"], key="k_gb_up")
