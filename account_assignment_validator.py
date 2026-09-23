@@ -81,6 +81,7 @@ NAT_SHEET_NAME     = "2026 Nat Zip Assignments"
 # ── Column hints (most-specific → least-specific) ─────────────────────────────
 HINTS = {
     "account_name": ["account name", "company name", "account"],
+    "account_id":   ["account id", "account: id", "18 digit", "sfdc id", "acct id"],
     "segment":      ["us market segment", "market segment", "sales segment",
                      "account segment", "owner division", "acct owner division",
                      "acct division", "segment", "territory", "division", "assignment"],
@@ -308,6 +309,11 @@ def lookup_owner(zip_raw, territory_dict):
         return f"{owner} \u2014 {territory}" if territory else owner
     return str(entry)
 
+def lookup_owner_entry(zip_raw, territory_dict):
+    """Return raw dict entry {owner, owner_id?, territory?} for email building."""
+    if not zip_raw or not territory_dict: return None
+    return territory_dict.get(normalize_zip(zip_raw))
+
 # ── LinkedIn ──────────────────────────────────────────────────────────────────
 
 def linkedin_search_url(name):
@@ -323,6 +329,7 @@ def process_row(row, mapping, gb_dict=None, national_dict=None):
     national_dict = national_dict or {}
 
     name        = str(row.get(mapping.get("account_name") or "", "")).strip()
+    acct_id     = str(row.get(mapping.get("account_id")   or "", "")).strip()
     current_raw = str(row.get(mapping.get("segment")      or "", "")).strip()
     current_seg = normalize_segment(current_raw)
     dnb_raw     = str(row.get(mapping.get("dnb")          or "", "")).strip()
@@ -337,6 +344,8 @@ def process_row(row, mapping, gb_dict=None, national_dict=None):
 
     rec = {
         "account_name":     name,
+        "account_id":       acct_id,
+        "zip":              zip_raw,
         "city":             city       or "\u2014",
         "state":            state      or "\u2014",
         "opp_name":         opp_name   or "\u2014",
@@ -352,7 +361,7 @@ def process_row(row, mapping, gb_dict=None, national_dict=None):
         "suggested_owner":  "\u2014",
     }
 
-    if dnb_val is not None:
+    if dnb_val is not None and dnb_val >= 5:
         # ── ROE path ──────────────────────────────────────────────────────────
         if dnb_val >= DNB_THRESHOLD:
             rec["expected_segment"] = "US National"
@@ -371,8 +380,14 @@ def process_row(row, mapping, gb_dict=None, national_dict=None):
             rec["suggested_owner"] = owner or ("Zip not in territory file" if correct_dict else "\u2014")
 
     else:
-        # ── No D&B ────────────────────────────────────────────────────────────
-        rec["basis"]        = "No D\u0026B data \u2014 manual LinkedIn check needed"
+        # ── No D&B or D&B < 5 (suspect value) ────────────────────────────────
+        if dnb_val is not None:
+            rec["basis"] = (
+                f"D\u0026B: {dnb_val} \u2014 value < 5, likely incorrect. "
+                "Verify headcount via LinkedIn."
+            )
+        else:
+            rec["basis"] = "No D\u0026B data \u2014 manual LinkedIn check needed"
         rec["linkedin_url"] = linkedin_search_url(name)
         rec["status"]       = "Needs Review"
         if gb_dict or national_dict:
@@ -433,6 +448,7 @@ def render_table(rows):
 def col_preview_html(col_labels, rows, mapping):
     fields = [
         ("Account Name",    mapping.get("account_name")),
+        ("Account ID",      mapping.get("account_id")),
         ("Current Segment", mapping.get("segment")),
         ("D&B Employees",   mapping.get("dnb")),
         ("City",            mapping.get("city")),
@@ -585,15 +601,18 @@ if st.session_state.get("rows"):
     def _idx(cols, val):
         return cols.index(val) if val in cols else 0
 
-    # Row 1 — required account fields
-    r1c1, r1c2, r1c3 = st.columns(3)
+    # Row 1 — required account fields + account ID
+    r1c1, r1c2, r1c3, r1c4 = st.columns(4)
     with r1c1:
         acct_col = st.selectbox("Account Name \u2733", col_labels,
             index=_idx(col_labels, auto_detect(col_labels, "account_name", rows)))
     with r1c2:
+        acct_id_col = st.selectbox("Account ID (18-digit)", opt,
+            index=_idx(opt, auto_detect(col_labels, "account_id", rows, required=False)))
+    with r1c3:
         seg_col  = st.selectbox("Current Segment \u2733", col_labels,
             index=_idx(col_labels, auto_detect(col_labels, "segment", rows)))
-    with r1c3:
+    with r1c4:
         dnb_col  = st.selectbox("D\u0026B Employees Worldwide \u2733", col_labels,
             index=_idx(col_labels, auto_detect(col_labels, "dnb", rows)))
 
@@ -626,6 +645,7 @@ if st.session_state.get("rows"):
 
     mapping = {
         "account_name": acct_col,
+        "account_id":   None if acct_id_col == "(not available)" else acct_id_col,
         "segment":      seg_col,
         "dnb":          dnb_col,
         "city":         None if city_col  == "(not available)" else city_col,
@@ -678,7 +698,7 @@ if st.session_state.get("results"):
     m1.metric("Total Opportunities",    total)
     m2.metric("Correctly Assigned",     f"{correct} ({pct(correct)})")
     m3.metric("Incorrectly Assigned",   f"{wrong} ({pct(wrong)})")
-    m4.metric("Needs Review (no D&B)",  f"{review} ({pct(review)})")
+    m4.metric("Needs Review",  f"{review} ({pct(review)})")
 
     st.write("")
     all_statuses = ["All"] + sorted({r["status"] for r in results})
@@ -691,10 +711,10 @@ if st.session_state.get("results"):
     st.write("")
     buf    = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=[
-        "account_name", "city", "state", "opp_name", "stage", "close_date", "amount",
+        "account_name", "account_id", "city", "state", "opp_name", "stage", "close_date", "amount",
         "current_segment", "dnb_employees", "expected_segment",
         "status", "basis", "suggested_owner", "linkedin_url",
-    ])
+    ], extrasaction="ignore")
     writer.writeheader()
     writer.writerows(results)
     st.download_button(
@@ -704,3 +724,146 @@ if st.session_state.get("results"):
         "text/csv",
         key="btn_csv",
     )
+
+    # ── Step 4: Submit to Field Services ──────────────────────────────────────
+    actionable = [r for r in results if r["status"] in ("Incorrect", "Needs Review")]
+    if actionable:
+        st.markdown("---")
+        st.markdown("**4. Submit Reassignment Request to Field Services**")
+        st.caption(
+            "Select the accounts that have been reviewed and confirmed, choose the correct segment, "
+            "then click Submit to FS to open a pre-filled email draft."
+        )
+
+        gb_dict_fs  = st.session_state.get("gb_dict",  {})
+        nat_dict_fs = st.session_state.get("nat_dict", {})
+
+        # Header row
+        hc = st.columns([0.4, 3.2, 1.8, 2.6])
+        hc[0].markdown("<small><b>Select</b></small>", unsafe_allow_html=True)
+        hc[1].markdown("<small><b>Account</b></small>", unsafe_allow_html=True)
+        hc[2].markdown("<small><b>Assign to Segment</b></small>", unsafe_allow_html=True)
+        hc[3].markdown("<small><b>Suggested Owner</b></small>", unsafe_allow_html=True)
+        st.markdown(
+            "<hr style='margin:.3rem 0 .6rem 0;border-color:#E1E2E6'>",
+            unsafe_allow_html=True,
+        )
+
+        selected_items = []
+        for i, r in enumerate(actionable):
+            cols = st.columns([0.4, 3.2, 1.8, 2.6])
+            with cols[0]:
+                checked = st.checkbox("", key=f"fs_chk_{i}", label_visibility="collapsed")
+            with cols[1]:
+                acct_id_display = r.get("account_id", "")
+                id_tag = (
+                    f" <span style='font-size:.75rem;color:#6A7275;font-family:monospace'>"
+                    f"{he(acct_id_display)}</span>"
+                    if acct_id_display else ""
+                )
+                st.markdown(
+                    f"<b>{he(r['account_name'])}</b>{id_tag}"
+                    f"<br><span style='font-size:.75rem;color:#6A7275'>"
+                    f"{badge_html(r['status'])} &nbsp; D&amp;B: {he(str(r['dnb_employees']))}"
+                    f"</span>",
+                    unsafe_allow_html=True,
+                )
+            with cols[2]:
+                # Pre-select segment: Incorrect → expected, Needs Review → GB default
+                default_idx = (
+                    1 if r["status"] == "Incorrect"
+                       and r.get("expected_segment") == "US National"
+                    else 0
+                )
+                chosen_seg = st.selectbox(
+                    "Segment",
+                    ["General Business", "US National"],
+                    index=default_idx,
+                    key=f"fs_seg_{i}",
+                    label_visibility="collapsed",
+                )
+            with cols[3]:
+                tgt_dict = nat_dict_fs if chosen_seg == "US National" else gb_dict_fs
+                entry    = lookup_owner_entry(r.get("zip", ""), tgt_dict)
+                if entry:
+                    owner_name  = entry.get("owner", "")
+                    owner_id    = entry.get("owner_id", "")
+                    terr_name   = entry.get("territory", "")
+                    display_str = owner_name
+                    if terr_name: display_str += f" — {terr_name}"
+                else:
+                    owner_name  = ""
+                    owner_id    = ""
+                    terr_name   = ""
+                    display_str = "Zip not in territory file"
+                st.markdown(
+                    f"<span style='font-size:.82rem'>{he(display_str)}</span>",
+                    unsafe_allow_html=True,
+                )
+
+            if checked:
+                selected_items.append({
+                    "account_name": r["account_name"],
+                    "account_id":   r.get("account_id", ""),
+                    "zip":          r.get("zip", ""),
+                    "status":       r["status"],
+                    "dnb":          str(r["dnb_employees"]),
+                    "basis":        r["basis"],
+                    "chosen_seg":   chosen_seg,
+                    "owner_name":   owner_name,
+                    "owner_id":     owner_id,
+                    "territory":    terr_name,
+                })
+
+        st.write("")
+        if st.button("Submit to FS", key="btn_submit_fs", disabled=(len(selected_items) == 0)):
+            # Build email body
+            lines = [
+                "Hello Field Services team,",
+                "",
+                "Please process the following account reassignment(s) per the Rules of Engagement:",
+                "",
+            ]
+            for item in selected_items:
+                lines += [
+                    f"Account Name : {item['account_name']}",
+                    f"Account ID   : {item['account_id'] or 'N/A'}",
+                    f"New Segment  : {item['chosen_seg']}",
+                ]
+                if item["owner_name"]:
+                    lines.append(f"New Owner    : {item['owner_name']}")
+                if item["owner_id"]:
+                    lines.append(f"Owner ID     : {item['owner_id']}")
+                if item["territory"]:
+                    lines.append(f"Territory    : {item['territory']}")
+                lines += [
+                    f"Reason       : {item['basis']}",
+                    "-" * 60,
+                    "",
+                ]
+            lines += [
+                "Please confirm once the reassignment(s) have been processed.",
+                "",
+                "Thank you",
+            ]
+            email_body = "\r\n".join(lines)
+            mailto_url = (
+                "mailto:concur_fieldservices@sap.com"
+                + "?subject=" + urllib.parse.quote("Account Reassignment Request", safe="")
+                + "&body="    + urllib.parse.quote(email_body, safe="")
+            )
+            n = len(selected_items)
+            st.markdown(
+                f"<a href='{mailto_url}' target='_blank' style='"
+                f"display:inline-block;background:#0070F2;color:white;padding:.5rem 1.2rem;"
+                f"border-radius:4px;font-weight:600;text-decoration:none;font-size:.9rem'>"
+                f"Open email draft ({n} account{'s' if n != 1 else ''})"
+                f"</a>",
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                "Your email client will open with the request pre-filled. "
+                "Review and send — do not modify the Account ID or Owner ID fields."
+            )
+            with st.expander("Preview email body"):
+                st.code("\n".join(lines), language=None)
