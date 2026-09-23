@@ -6,6 +6,7 @@ Streamlit Cloud compatible. Dependencies: streamlit, openpyxl.
 """
 
 import streamlit as st
+import streamlit.components.v1 as stc
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -13,6 +14,7 @@ import json
 import re
 import csv
 import io
+import base64
 from pathlib import Path
 from html import escape as he
 
@@ -903,99 +905,222 @@ if st.session_state.get("results"):
             st.success("No accounts need review.")
 
     # ── Reassignment actions ──────────────────────────────────────────────────
-    all_selections = inc_selections + nr_selections
+    all_selections   = inc_selections + nr_selections
     total_actionable = len(wrong_rows) + len(review_rows)
+
+    # ── Excel builder ─────────────────────────────────────────────────────────
+    def _build_excel(sels):
+        import openpyxl
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Reassignment Request"
+
+        headers = [
+            "Account Name", "Account ID", "Current Segment", "New Segment",
+            "New Owner", "Owner ID", "Territory",
+            "City, State", "D&B Employees", "Basis / Reason",
+        ]
+        col_widths = [38, 22, 22, 22, 32, 20, 32, 22, 14, 55]
+
+        # ── Header row ────────────────────────────────────────────────────────
+        hdr_fill  = PatternFill("solid", fgColor="0070F2")
+        hdr_font  = Font(color="FFFFFF", bold=True, name="Calibri", size=11)
+        hdr_align = Alignment(horizontal="center", vertical="center",
+                               wrap_text=True)
+        thin = Side(style="thin", color="FFFFFF")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        for ci, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=ci, value=h)
+            cell.fill    = hdr_fill
+            cell.font    = hdr_font
+            cell.alignment = hdr_align
+            cell.border  = border
+
+        ws.row_dimensions[1].height = 32
+
+        # ── Data rows ─────────────────────────────────────────────────────────
+        alt_fill  = PatternFill("solid", fgColor="E1F4FF")
+        dat_font  = Font(name="Calibri", size=10)
+        dat_align = Alignment(vertical="top", wrap_text=True)
+        dat_border = Border(
+            left=Side(style="thin", color="D0D0D0"),
+            right=Side(style="thin", color="D0D0D0"),
+            bottom=Side(style="thin", color="D0D0D0"),
+        )
+
+        for ri, s in enumerate(sels, 2):
+            values = [
+                s["account_name"],    s["account_id"],
+                s["current_segment"], s["segment_to_assign"],
+                s["owner_name"],      s["owner_id"],
+                s["territory"],       s["city_state"],
+                s["dnb"],             s["basis"],
+            ]
+            fill = alt_fill if ri % 2 == 0 else None
+            for ci, val in enumerate(values, 1):
+                cell = ws.cell(row=ri, column=ci, value=val or "")
+                cell.font      = dat_font
+                cell.alignment = dat_align
+                cell.border    = dat_border
+                if fill:
+                    cell.fill = fill
+            ws.row_dimensions[ri].height = 18
+
+        # ── Column widths + freeze ─────────────────────────────────────────────
+        for ci, w in enumerate(col_widths, 1):
+            ws.column_dimensions[get_column_letter(ci)].width = w
+        ws.freeze_panes = "A2"
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    # ── Preview table helper ──────────────────────────────────────────────────
+    def _preview_html(sels):
+        if not sels:
+            return "<p style='color:#6A7275;font-size:.85rem'>No accounts selected.</p>"
+        cols = ["Account Name", "Account ID", "New Segment",
+                "New Owner", "Territory", "City, State", "D&B", "Basis"]
+        thead = "".join(
+            f"<th style='background:#0070F2;color:#fff;padding:.45rem .7rem;"
+            f"text-align:left;font-size:.78rem;white-space:nowrap'>{c}</th>"
+            for c in cols
+        )
+        tbody = ""
+        for ri, s in enumerate(sels):
+            bg = "#E1F4FF" if ri % 2 == 0 else "#fff"
+            vals = [
+                he(s["account_name"]),
+                f"<span style='font-family:monospace;font-size:.72rem'>{he(s['account_id'])}</span>",
+                he(s["segment_to_assign"]),
+                he(s["owner_name"] or "\u2014"),
+                he(s["territory"]  or "\u2014"),
+                he(s["city_state"]),
+                he(s["dnb"]),
+                f"<span style='font-size:.75rem'>{he(s['basis'])}</span>",
+            ]
+            tds = "".join(
+                f"<td style='padding:.4rem .7rem;border-bottom:1px solid #E1E2E6;"
+                f"font-size:.82rem;vertical-align:top'>{v}</td>"
+                for v in vals
+            )
+            tbody += f"<tr style='background:{bg}'>{tds}</tr>"
+        return (
+            "<div style='overflow-x:auto'>"
+            f"<table style='border-collapse:collapse;width:100%'>"
+            f"<thead><tr>{thead}</tr></thead>"
+            f"<tbody>{tbody}</tbody>"
+            "</table></div>"
+        )
 
     if total_actionable > 0:
         st.markdown("---")
+        st.caption(
+            f"{len(all_selections)} of {total_actionable} actionable accounts selected. "
+            "Uncheck rows above to exclude from the file and email."
+        )
 
-        # Build reassignment CSV from current selections
-        def _build_reassign_csv(sels):
-            buf = io.StringIO()
-            w   = csv.writer(buf)
-            w.writerow([
-                "Account Name", "Account ID", "Current Segment",
-                "Segment to Assign", "New Owner", "Owner ID", "Territory",
-                "City, State", "D&B", "Basis",
-            ])
+        # ── Preview toggle ────────────────────────────────────────────────────
+        if st.toggle("Preview reassignment file", key="k_xl_preview"):
+            st.markdown(_preview_html(all_selections), unsafe_allow_html=True)
+            st.write("")
+
+        # ── Action buttons ────────────────────────────────────────────────────
+        excel_bytes = _build_excel(all_selections) if all_selections else b""
+        excel_b64   = base64.b64encode(excel_bytes).decode() if excel_bytes else ""
+
+        # Build compact email body (details are in the Excel attachment)
+        def _email_body(sels):
+            lines = [
+                "Hello Field Services team,",
+                "",
+                "Please process the account reassignment(s) in the attached Excel file.",
+                "",
+                "Summary:",
+            ]
             for s in sels:
-                w.writerow([
-                    s["account_name"],      s["account_id"],
-                    s["current_segment"],   s["segment_to_assign"],
-                    s["owner_name"],        s["owner_id"],
-                    s["territory"],         s["city_state"],
-                    s["dnb"],               s["basis"],
-                ])
-            return buf.getvalue()
+                arrow = f"{s['current_segment']} \u2192 {s['segment_to_assign']}"
+                owner = f" \u2014 {s['owner_name']}" if s["owner_name"] else ""
+                lines.append(f"  \u2022 {s['account_name']} ({s['account_id'] or 'no ID'}): "
+                             f"{arrow}{owner}")
+            lines += [
+                "",
+                "Please confirm once the reassignment(s) have been processed.",
+                "",
+                "Thank you",
+            ]
+            return lines
 
-        ac1, ac2, ac3 = st.columns([1.3, 1.3, 5])
+        email_lines = _email_body(all_selections)
+        email_body  = "\r\n".join(email_lines)
+        mailto_url  = (
+            "mailto:concur_fieldservices@sap.com"
+            + "?subject=" + urllib.parse.quote("Account Reassignment Request", safe="")
+            + "&body="    + urllib.parse.quote(email_body, safe="")
+        )
+
+        # Escape for embedding in JS string
+        mailto_js = mailto_url.replace("\\", "\\\\").replace("'", "\\'")
+
+        ac1, ac2, _spacer = st.columns([1.5, 2.0, 4])
 
         with ac1:
             st.download_button(
-                "Download Reassignment CSV",
-                _build_reassign_csv(all_selections),
-                "reassignment_request.csv",
-                "text/csv",
-                key="btn_reassign_csv",
+                "Download Excel (.xlsx)",
+                excel_bytes,
+                "reassignment_request.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="btn_dl_excel",
                 disabled=not all_selections,
             )
 
         with ac2:
-            if st.button(
-                "Submit to FS",
-                key="btn_submit_fs",
-                disabled=not all_selections,
-            ):
-                lines = [
-                    "Hello Field Services team,",
-                    "",
-                    "Please process the following account reassignment(s) "
-                    "per the Rules of Engagement:",
-                    "",
-                ]
-                for s in all_selections:
-                    lines += [
-                        f"Account Name : {s['account_name']}",
-                        f"Account ID   : {s['account_id'] or 'N/A'}",
-                        f"New Segment  : {s['segment_to_assign']}",
-                    ]
-                    if s["owner_name"]: lines.append(f"New Owner    : {s['owner_name']}")
-                    if s["owner_id"]:   lines.append(f"Owner ID     : {s['owner_id']}")
-                    if s["territory"]:  lines.append(f"Territory    : {s['territory']}")
-                    lines += [f"Reason       : {s['basis']}", "-" * 55, ""]
-                lines += [
-                    "Please confirm once the reassignment(s) have been processed.",
-                    "",
-                    "Thank you",
-                ]
-                body = "\r\n".join(lines)
-                st.session_state["_mailto"] = (
-                    "mailto:concur_fieldservices@sap.com"
-                    + "?subject=" + urllib.parse.quote("Account Reassignment Request", safe="")
-                    + "&body="    + urllib.parse.quote(body, safe="")
-                )
-                st.session_state["_mailto_n"]     = len(all_selections)
-                st.session_state["_mailto_lines"] = lines
-
-        if st.session_state.get("_mailto"):
-            n = st.session_state["_mailto_n"]
-            st.markdown(
-                f"<a href='{st.session_state['_mailto']}' target='_blank' style='"
-                f"display:inline-block;background:#0070F2;color:white;"
-                f"padding:.45rem 1.2rem;border-radius:4px;font-weight:600;"
-                f"text-decoration:none;font-size:.88rem'>"
-                f"Open email draft ({n} account{'s' if n != 1 else ''})"
-                f"</a>",
-                unsafe_allow_html=True,
+            # Single button: downloads Excel + opens email draft simultaneously
+            n_sel = len(all_selections)
+            btn_label = (
+                f"Attach &amp; Send to FS for Reassignment "
+                f"({n_sel} account{'s' if n_sel != 1 else ''})"
             )
-            st.write("")
-            if st.toggle("Preview email body", key="k_email_preview"):
-                st.code("\n".join(st.session_state["_mailto_lines"]), language=None)
+            stc.html(
+                f"""
+                <style>
+                  #fs-btn {{
+                    background: {'#0070F2' if all_selections else '#BCC0C5'};
+                    color: #fff;
+                    border: none;
+                    padding: .45rem 1rem;
+                    border-radius: 4px;
+                    font-weight: 600;
+                    font-size: .84rem;
+                    cursor: {'pointer' if all_selections else 'not-allowed'};
+                    font-family: '72', Arial, Helvetica, sans-serif;
+                    white-space: nowrap;
+                  }}
+                  #fs-btn:hover {{ background: {'#0057C2' if all_selections else '#BCC0C5'}; }}
+                </style>
+                <button id="fs-btn"
+                  {'disabled' if not all_selections else ''}
+                  onclick="(function(){{
+                    var a = document.createElement('a');
+                    a.href = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{excel_b64}';
+                    a.download = 'reassignment_request.xlsx';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setTimeout(function(){{ window.location.href = '{mailto_js}'; }}, 900);
+                  }})()">
+                  {btn_label}
+                </button>
+                """,
+                height=48,
+            )
 
-        st.caption(
-            f"{len(all_selections)} of {total_actionable} actionable accounts selected. "
-            "Uncheck rows to exclude from the CSV and email."
-        )
+        if st.toggle("Preview email body", key="k_email_preview"):
+            st.code("\n".join(email_lines), language=None)
 
     # ── Full results CSV ──────────────────────────────────────────────────────
     st.write("")
