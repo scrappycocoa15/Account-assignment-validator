@@ -13,7 +13,6 @@ import json
 import re
 import csv
 import io
-import pandas as pd
 from pathlib import Path
 from html import escape as he
 
@@ -684,6 +683,7 @@ if st.session_state.get("rows"):
         prog.empty()
         st.session_state["results"] = results
 
+
 # ── Step 3: Results ───────────────────────────────────────────────────────────
 if st.session_state.get("results"):
     results = st.session_state["results"]
@@ -709,100 +709,63 @@ if st.session_state.get("results"):
     gb_dict_r  = st.session_state.get("gb_dict",  {})
     nat_dict_r = st.session_state.get("nat_dict", {})
 
-    # ── Helper: build DataFrames for editable tables ──────────────────────────
+    # ── Small helpers ─────────────────────────────────────────────────────────
 
     def _cs(r):
         c, s = str(r["city"]), str(r["state"])
-        return "—" if c == "—" and s == "—" else f"{c}, {s}"
+        return "\u2014" if c == "\u2014" and s == "\u2014" else f"{c}, {s}"
 
-    def _build_incorrect_df(rows):
-        data = []
-        for r in rows:
-            exp = r.get("expected_segment", "General Business")
-            if exp not in ("General Business", "US National"):
-                exp = "General Business"
-            data.append({
-                "_zip":            r.get("zip", ""),
-                "Account Name":    r["account_name"],
-                "Account ID":      r.get("account_id", ""),
-                "City, State":     _cs(r),
-                "Opportunity":     str(r.get("opp_name", "—")),
-                "D&B":             str(r["dnb_employees"]),
-                "Current Segment": r["current_segment"],
-                "ROE Expects":     r.get("expected_segment", "—"),
-                "Segment to Assign": exp,
-                "Suggested Owner": str(r.get("suggested_owner", "—")),
-            })
-        return pd.DataFrame(data)
+    def _owner_str(zip_raw, seg):
+        """Return (display_str, owner, owner_id, territory) for a zip + segment."""
+        tgt   = nat_dict_r if seg == "US National" else gb_dict_r
+        entry = lookup_owner_entry(zip_raw, tgt) or {}
+        owner    = entry.get("owner",    "")
+        owner_id = entry.get("owner_id", "")
+        terr     = entry.get("territory","")
+        display  = f"{owner} \u2014 {terr}" if terr else (owner or "Zip not in territory file")
+        return display, owner, owner_id, terr
 
-    def _build_review_df(rows):
-        data = []
-        for r in rows:
-            gb_e  = lookup_owner_entry(r.get("zip", ""), gb_dict_r)
-            nat_e = lookup_owner_entry(r.get("zip", ""), nat_dict_r)
+    # ── Render helpers ────────────────────────────────────────────────────────
 
-            def _fmt(e):
-                if not e: return "—"
-                n = e.get("owner", "")
-                t = e.get("territory", "")
-                return f"{n} — {t}" if t else (n or "—")
+    _HDR = "font-size:.78rem;font-weight:700;color:#0070F2;padding:.3rem 0;white-space:nowrap;"
+    _CEL = "font-size:.82rem;padding:.1rem 0;line-height:1.4;"
+    _MID = "font-size:.78rem;color:#6A7275;font-family:monospace;padding:.1rem 0;"
+    _LNK = "font-size:.82rem;color:#0070F2;text-decoration:none;font-weight:500;"
 
-            data.append({
-                "_zip":              r.get("zip", ""),
-                "Account Name":      r["account_name"],
-                "Account ID":        r.get("account_id", ""),
-                "City, State":       _cs(r),
-                "Opportunity":       str(r.get("opp_name", "—")),
-                "D&B":               str(r["dnb_employees"]),
-                "Basis":             r["basis"],
-                "Segment to Assign": "General Business",
-                "If GB Owner":       _fmt(gb_e),
-                "If National Owner": _fmt(nat_e),
-                "LinkedIn":          r.get("linkedin_url", ""),
-            })
-        return pd.DataFrame(data)
+    def _hdr(txt):
+        st.markdown(f"<div style='{_HDR}'>{txt}</div>", unsafe_allow_html=True)
 
-    # ── Helper: build reassignment CSV from edited DataFrames ─────────────────
+    def _cell(txt, sty=None):
+        s = sty or _CEL
+        st.markdown(f"<div style='{s}'>{he(str(txt))}</div>", unsafe_allow_html=True)
 
-    def _reassignment_csv(inc_df, nr_df):
-        buf = io.StringIO()
-        w   = csv.writer(buf)
-        w.writerow([
-            "Account Name", "Account ID", "Current Segment",
-            "Segment to Assign", "New Owner", "Owner ID", "Territory",
-            "City, State", "D&B", "Basis",
-        ])
-        for df in [inc_df, nr_df]:
-            if df is None or df.empty:
-                continue
-            for _, row in df.iterrows():
-                seg   = row.get("Segment to Assign", "General Business")
-                tgt   = nat_dict_r if seg == "US National" else gb_dict_r
-                entry = lookup_owner_entry(str(row.get("_zip", "")), tgt) or {}
-                w.writerow([
-                    row.get("Account Name", ""),
-                    row.get("Account ID",   ""),
-                    row.get("Current Segment", ""),
-                    seg,
-                    entry.get("owner",     ""),
-                    entry.get("owner_id",  ""),
-                    entry.get("territory", ""),
-                    row.get("City, State", ""),
-                    row.get("D&B", ""),
-                    row.get("Basis", ""),
-                ])
-        return buf.getvalue()
+    def _sep():
+        st.markdown(
+            "<hr style='margin:.25rem 0 .4rem 0;border:none;"
+            "border-top:1px solid #E1E2E6'>",
+            unsafe_allow_html=True,
+        )
 
-    # ── Three tabs ────────────────────────────────────────────────────────────
+    # ── Column ratios ─────────────────────────────────────────────────────────
+    #  [chk | name | id | city,st | dnb | roe/basis | seg-dropdown | owner ]
+    _INC = [0.32, 2.4, 1.0, 1.15, 0.65, 1.2, 1.6, 2.3]
+    _NR  = [0.32, 2.4, 1.0, 1.15, 0.65, 2.5, 1.6, 2.3, 0.72]
 
+    _INC_HDRS = ["", "Account Name", "Account ID", "City, State",
+                 "D&B", "ROE Expects", "Segment to Assign", "Account Owner"]
+    _NR_HDRS  = ["", "Account Name", "Account ID", "City, State",
+                 "D&B", "Basis", "Segment to Assign", "Account Owner", "LinkedIn"]
+
+    # Selections built during tab rendering
+    inc_selections = []
+    nr_selections  = []
+
+    # ── Tabs ──────────────────────────────────────────────────────────────────
     tab1, tab2, tab3 = st.tabs([
         f"Correct ({len(correct_rows)})",
         f"Incorrect ({len(wrong_rows)})",
         f"Needs Review ({len(review_rows)})",
     ])
-
-    edited_inc = pd.DataFrame()
-    edited_nr  = pd.DataFrame()
 
     with tab1:
         if correct_rows:
@@ -810,116 +773,231 @@ if st.session_state.get("results"):
         else:
             st.success("All accounts in this report are correctly assigned.")
 
+    # ── Tab 2: Incorrect ──────────────────────────────────────────────────────
     with tab2:
         if wrong_rows:
             st.caption(
-                "D&B is sufficient to determine the correct segment per ROE. "
-                "The **Segment to Assign** column is pre-filled from the ROE rule — "
-                "adjust if needed, then use the download below."
+                "Segment to Assign is pre-filled from the ROE rule. "
+                "Change it if needed \u2014 Account Owner updates immediately."
             )
-            inc_df = _build_incorrect_df(wrong_rows)
-            _inc_disabled = [
-                "Account Name", "Account ID", "City, State", "Opportunity",
-                "D&B", "Current Segment", "ROE Expects", "Suggested Owner",
-            ]
-            edited_inc = st.data_editor(
-                inc_df,
-                column_order=[
-                    "Account Name", "Account ID", "City, State", "Opportunity",
-                    "D&B", "Current Segment", "ROE Expects",
-                    "Segment to Assign", "Suggested Owner",
-                ],
-                column_config={
-                    "_zip":              None,
-                    "Account Name":      st.column_config.TextColumn(width="medium"),
-                    "Account ID":        st.column_config.TextColumn(width="small"),
-                    "City, State":       st.column_config.TextColumn(width="small"),
-                    "Opportunity":       st.column_config.TextColumn(width="medium"),
-                    "D&B":               st.column_config.TextColumn(width="small"),
-                    "Current Segment":   st.column_config.TextColumn(width="small"),
-                    "ROE Expects":       st.column_config.TextColumn(width="small"),
-                    "Segment to Assign": st.column_config.SelectboxColumn(
-                        "Segment to Assign",
-                        options=["General Business", "US National"],
-                        required=True,
-                        width="medium",
-                    ),
-                    "Suggested Owner":   st.column_config.TextColumn(width="large"),
-                },
-                disabled=_inc_disabled,
-                hide_index=True,
-                use_container_width=True,
-                key="de_incorrect",
-            )
+            hcols = st.columns(_INC)
+            for hc, lbl in zip(hcols, _INC_HDRS):
+                with hc: _hdr(lbl)
+            _sep()
+
+            for i, r in enumerate(wrong_rows):
+                exp = r.get("expected_segment", "General Business")
+                if exp not in ("General Business", "US National"):
+                    exp = "General Business"
+                cols = st.columns(_INC)
+
+                with cols[0]:
+                    checked = st.checkbox("", key=f"inc_chk_{i}",
+                                          value=True, label_visibility="collapsed")
+                with cols[1]:
+                    st.markdown(
+                        f"<div style='{_CEL}'><b>{he(r['account_name'])}</b></div>",
+                        unsafe_allow_html=True,
+                    )
+                with cols[2]:
+                    _cell(r.get("account_id", "\u2014"), _MID)
+                with cols[3]:
+                    _cell(_cs(r))
+                with cols[4]:
+                    _cell(r["dnb_employees"])
+                with cols[5]:
+                    _cell(exp)
+                with cols[6]:
+                    chosen_seg = st.selectbox(
+                        "seg", ["General Business", "US National"],
+                        index=1 if exp == "US National" else 0,
+                        key=f"inc_seg_{i}",
+                        label_visibility="collapsed",
+                    )
+                with cols[7]:
+                    disp, owner, owner_id, terr = _owner_str(r.get("zip", ""), chosen_seg)
+                    _cell(disp)
+
+                if checked:
+                    inc_selections.append({
+                        "account_name":      r["account_name"],
+                        "account_id":        r.get("account_id", ""),
+                        "current_segment":   r["current_segment"],
+                        "segment_to_assign": chosen_seg,
+                        "owner_name":        owner,
+                        "owner_id":          owner_id,
+                        "territory":         terr,
+                        "city_state":        _cs(r),
+                        "dnb":               str(r["dnb_employees"]),
+                        "basis":             r["basis"],
+                    })
         else:
             st.success("No incorrectly assigned accounts found.")
 
+    # ── Tab 3: Needs Review ───────────────────────────────────────────────────
     with tab3:
         if review_rows:
             st.caption(
-                "D&B is missing or < 5 — verify headcount via the LinkedIn link, "
-                "then select the correct segment in **Segment to Assign**. "
-                "Owner columns update in the download based on your selection."
+                "D&B is missing or < 5. Verify headcount via LinkedIn, "
+                "select the correct segment \u2014 Account Owner updates immediately."
             )
-            nr_df = _build_review_df(review_rows)
-            _nr_disabled = [
-                "Account Name", "Account ID", "City, State", "Opportunity",
-                "D&B", "Basis", "If GB Owner", "If National Owner", "LinkedIn",
-            ]
-            edited_nr = st.data_editor(
-                nr_df,
-                column_order=[
-                    "Account Name", "Account ID", "City, State", "Opportunity",
-                    "D&B", "Basis", "Segment to Assign",
-                    "If GB Owner", "If National Owner", "LinkedIn",
-                ],
-                column_config={
-                    "_zip":              None,
-                    "Account Name":      st.column_config.TextColumn(width="medium"),
-                    "Account ID":        st.column_config.TextColumn(width="small"),
-                    "City, State":       st.column_config.TextColumn(width="small"),
-                    "Opportunity":       st.column_config.TextColumn(width="medium"),
-                    "D&B":               st.column_config.TextColumn(width="small"),
-                    "Basis":             st.column_config.TextColumn(width="large"),
-                    "Segment to Assign": st.column_config.SelectboxColumn(
-                        "Segment to Assign",
-                        options=["General Business", "US National"],
-                        required=True,
-                        width="medium",
-                    ),
-                    "If GB Owner":       st.column_config.TextColumn(width="large"),
-                    "If National Owner": st.column_config.TextColumn(width="large"),
-                    "LinkedIn":          st.column_config.LinkColumn(
-                        "LinkedIn", display_text="Search", width="small"
-                    ),
-                },
-                disabled=_nr_disabled,
-                hide_index=True,
-                use_container_width=True,
-                key="de_needs_review",
-            )
+            hcols = st.columns(_NR)
+            for hc, lbl in zip(hcols, _NR_HDRS):
+                with hc: _hdr(lbl)
+            _sep()
+
+            for i, r in enumerate(review_rows):
+                cols = st.columns(_NR)
+
+                with cols[0]:
+                    checked = st.checkbox("", key=f"nr_chk_{i}",
+                                          value=True, label_visibility="collapsed")
+                with cols[1]:
+                    st.markdown(
+                        f"<div style='{_CEL}'><b>{he(r['account_name'])}</b></div>",
+                        unsafe_allow_html=True,
+                    )
+                with cols[2]:
+                    _cell(r.get("account_id", "\u2014"), _MID)
+                with cols[3]:
+                    _cell(_cs(r))
+                with cols[4]:
+                    _cell(r["dnb_employees"])
+                with cols[5]:
+                    _cell(r["basis"])
+                with cols[6]:
+                    chosen_seg = st.selectbox(
+                        "seg", ["General Business", "US National"],
+                        index=0,
+                        key=f"nr_seg_{i}",
+                        label_visibility="collapsed",
+                    )
+                with cols[7]:
+                    disp, owner, owner_id, terr = _owner_str(r.get("zip", ""), chosen_seg)
+                    _cell(disp)
+                with cols[8]:
+                    li_url = r.get("linkedin_url", "")
+                    if li_url:
+                        st.markdown(
+                            f"<a href='{he(li_url)}' target='_blank'"
+                            f" style='{_LNK}'>Search \u2197</a>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        _cell("\u2014")
+
+                if checked:
+                    nr_selections.append({
+                        "account_name":      r["account_name"],
+                        "account_id":        r.get("account_id", ""),
+                        "current_segment":   r["current_segment"],
+                        "segment_to_assign": chosen_seg,
+                        "owner_name":        owner,
+                        "owner_id":          owner_id,
+                        "territory":         terr,
+                        "city_state":        _cs(r),
+                        "dnb":               str(r["dnb_employees"]),
+                        "basis":             r["basis"],
+                    })
         else:
             st.success("No accounts need review.")
 
-    # ── Download reassignment request ─────────────────────────────────────────
-    if wrong_rows or review_rows:
+    # ── Reassignment actions ──────────────────────────────────────────────────
+    all_selections = inc_selections + nr_selections
+    total_actionable = len(wrong_rows) + len(review_rows)
+
+    if total_actionable > 0:
         st.markdown("---")
-        st.markdown("**Download Reassignment Request**")
-        st.caption(
-            "Covers all rows in the Incorrect and Needs Review tabs. "
-            "New Owner is resolved from the territory file based on your Segment to Assign selection."
-        )
-        dl1, dl2 = st.columns([1, 4])
-        with dl1:
+
+        # Build reassignment CSV from current selections
+        def _build_reassign_csv(sels):
+            buf = io.StringIO()
+            w   = csv.writer(buf)
+            w.writerow([
+                "Account Name", "Account ID", "Current Segment",
+                "Segment to Assign", "New Owner", "Owner ID", "Territory",
+                "City, State", "D&B", "Basis",
+            ])
+            for s in sels:
+                w.writerow([
+                    s["account_name"],      s["account_id"],
+                    s["current_segment"],   s["segment_to_assign"],
+                    s["owner_name"],        s["owner_id"],
+                    s["territory"],         s["city_state"],
+                    s["dnb"],               s["basis"],
+                ])
+            return buf.getvalue()
+
+        ac1, ac2, ac3 = st.columns([1.3, 1.3, 5])
+
+        with ac1:
             st.download_button(
-                "Download CSV for FS",
-                _reassignment_csv(edited_inc, edited_nr),
+                "Download Reassignment CSV",
+                _build_reassign_csv(all_selections),
                 "reassignment_request.csv",
                 "text/csv",
                 key="btn_reassign_csv",
+                disabled=not all_selections,
             )
 
-    # ── Full results CSV (all rows) ───────────────────────────────────────────
+        with ac2:
+            if st.button(
+                "Submit to FS",
+                key="btn_submit_fs",
+                disabled=not all_selections,
+            ):
+                lines = [
+                    "Hello Field Services team,",
+                    "",
+                    "Please process the following account reassignment(s) "
+                    "per the Rules of Engagement:",
+                    "",
+                ]
+                for s in all_selections:
+                    lines += [
+                        f"Account Name : {s['account_name']}",
+                        f"Account ID   : {s['account_id'] or 'N/A'}",
+                        f"New Segment  : {s['segment_to_assign']}",
+                    ]
+                    if s["owner_name"]: lines.append(f"New Owner    : {s['owner_name']}")
+                    if s["owner_id"]:   lines.append(f"Owner ID     : {s['owner_id']}")
+                    if s["territory"]:  lines.append(f"Territory    : {s['territory']}")
+                    lines += [f"Reason       : {s['basis']}", "-" * 55, ""]
+                lines += [
+                    "Please confirm once the reassignment(s) have been processed.",
+                    "",
+                    "Thank you",
+                ]
+                body = "\r\n".join(lines)
+                st.session_state["_mailto"] = (
+                    "mailto:concur_fieldservices@sap.com"
+                    + "?subject=" + urllib.parse.quote("Account Reassignment Request", safe="")
+                    + "&body="    + urllib.parse.quote(body, safe="")
+                )
+                st.session_state["_mailto_n"]     = len(all_selections)
+                st.session_state["_mailto_lines"] = lines
+
+        if st.session_state.get("_mailto"):
+            n = st.session_state["_mailto_n"]
+            st.markdown(
+                f"<a href='{st.session_state['_mailto']}' target='_blank' style='"
+                f"display:inline-block;background:#0070F2;color:white;"
+                f"padding:.45rem 1.2rem;border-radius:4px;font-weight:600;"
+                f"text-decoration:none;font-size:.88rem'>"
+                f"Open email draft ({n} account{'s' if n != 1 else ''})"
+                f"</a>",
+                unsafe_allow_html=True,
+            )
+            st.write("")
+            if st.toggle("Preview email body", key="k_email_preview"):
+                st.code("\n".join(st.session_state["_mailto_lines"]), language=None)
+
+        st.caption(
+            f"{len(all_selections)} of {total_actionable} actionable accounts selected. "
+            "Uncheck rows to exclude from the CSV and email."
+        )
+
+    # ── Full results CSV ──────────────────────────────────────────────────────
     st.write("")
     all_buf = io.StringIO()
     all_w   = csv.DictWriter(all_buf, fieldnames=[
