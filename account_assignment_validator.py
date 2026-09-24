@@ -233,7 +233,8 @@ def _parse_territory_wb(wb, sheet_name):
     if own_idx is not None and "id" in hdr[own_idx]:
         own_idx = None
         own_idx = _col("fy26 account owner", "account owner name", "account owner", "rep name", "rep")
-    id_idx   = _col("owner id", "account owner id", "fy26 account owner id")
+    id_idx   = _col("fy26 account owner id", "account owner id",
+                    "owner id", "user id", "rep id", "sfdc id", "salesforce id")
     terr_idx = _col("territory name", "territory")
 
     if zip_idx is None or own_idx is None:
@@ -1038,18 +1039,7 @@ if st.session_state.get("results"):
             lines = [
                 "Hello Field Services team,",
                 "",
-                "Please process the account reassignment(s) in the attached Excel file.",
-                "",
-                "Summary:",
-            ]
-            for s in sels:
-                arrow = f"{s['current_segment']} \u2192 {s['segment_to_assign']}"
-                owner = f" \u2014 {s['owner_name']}" if s["owner_name"] else ""
-                lines.append(f"  \u2022 {s['account_name']} ({s['account_id'] or 'no ID'}): "
-                             f"{arrow}{owner}")
-            lines += [
-                "",
-                "Please confirm once the reassignment(s) have been processed.",
+                "Please reassign the attached accounts.",
                 "",
                 "Thank you",
             ]
