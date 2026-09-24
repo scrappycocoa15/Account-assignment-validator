@@ -991,7 +991,7 @@ if st.session_state.get("results"):
         if not sels:
             return "<p style='color:#6A7275;font-size:.85rem'>No accounts selected.</p>"
         cols = ["Account Name", "Account ID", "New Segment",
-                "New Owner", "Territory", "City, State", "D&B", "Basis"]
+                "New Owner", "Owner ID", "Territory", "City, State", "D&B", "Basis"]
         thead = "".join(
             f"<th style='background:#0070F2;color:#fff;padding:.45rem .7rem;"
             f"text-align:left;font-size:.78rem;white-space:nowrap'>{c}</th>"
@@ -1005,6 +1005,7 @@ if st.session_state.get("results"):
                 f"<span style='font-family:monospace;font-size:.72rem'>{he(s['account_id'])}</span>",
                 he(s["segment_to_assign"]),
                 he(s["owner_name"] or "\u2014"),
+                f"<span style='font-family:monospace;font-size:.72rem'>{he(s['owner_id'] or '\u2014')}</span>",
                 he(s["territory"]  or "\u2014"),
                 he(s["city_state"]),
                 he(s["dnb"]),
