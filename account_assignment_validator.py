@@ -227,12 +227,18 @@ def _parse_territory_wb(wb, sheet_name):
         return None
 
     zip_idx  = _col("zip code", "zip", "postal")
-    own_idx  = _col("fy26 account owner", "account owner name", "account owner",
-                    "rep name", "rep")
-    # exclude ID columns
-    if own_idx is not None and "id" in hdr[own_idx]:
-        own_idx = None
-        own_idx = _col("fy26 account owner", "account owner name", "account owner", "rep name", "rep")
+
+    # Owner name: prefer columns whose header ends with "owner" or "rep name",
+    # explicitly skip any column whose header ends with "id"
+    def _col_name_only(*needles):
+        for needle in needles:
+            for i, h in enumerate(hdr):
+                if needle in h and not h.rstrip().endswith("id"):
+                    return i
+        return None
+
+    own_idx  = _col_name_only("fy26 account owner", "account owner name",
+                               "account owner", "rep name", "rep")
     id_idx   = _col("fy26 account owner id", "account owner id",
                     "owner id", "user id", "rep id", "sfdc id", "salesforce id")
     terr_idx = _col("territory name", "territory")
