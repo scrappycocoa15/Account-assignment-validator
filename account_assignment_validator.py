@@ -19,7 +19,7 @@ from pathlib import Path
 from html import escape as he
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Opportunity Assignment Validator", layout="wide")
+st.set_page_config(page_title="New Account Assignment Validator", layout="wide")
 
 # ── SAP light-mode styling ────────────────────────────────────────────────────
 st.markdown("""
@@ -72,7 +72,7 @@ div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
 SFDC_API_VERSION = "v59.0"
 DNB_THRESHOLD    = 300
 DEFAULT_INSTANCE = "https://sapconcur.my.salesforce.com"
-DEFAULT_REPORT   = "00OPg00000Qgik1"
+DEFAULT_REPORT   = "00OPg00000QbzTl"
 
 _HERE              = Path(__file__).parent
 GB_TERRITORY_FILE  = _HERE / "2026-01-01 US General Business Territories.xlsx"
@@ -100,6 +100,7 @@ HINTS = {
     "opp_name":     ["opportunity name", "opp name", "opportunity"],
     "stage":        ["stage name", "opportunity stage", "stage"],
     "close_date":   ["close date", "close"],
+    "created_date": ["created date", "create date", "date created"],
     "amount":       ["amount", "arr", "acv", "value"],
 }
 
@@ -337,32 +338,26 @@ def process_row(row, mapping, gb_dict=None, national_dict=None):
     gb_dict       = gb_dict       or {}
     national_dict = national_dict or {}
 
-    name        = str(row.get(mapping.get("account_name") or "", "")).strip()
-    acct_id     = str(row.get(mapping.get("account_id")   or "", "")).strip()
-    current_raw = str(row.get(mapping.get("segment")      or "", "")).strip()
-    current_seg = normalize_segment(current_raw)
-    dnb_raw     = str(row.get(mapping.get("dnb")          or "", "")).strip()
-    dnb_val     = parse_number(dnb_raw)
-    city        = str(row.get(mapping.get("city")         or "", "")).strip()
-    state       = str(row.get(mapping.get("state")        or "", "")).strip()
-    zip_raw     = str(row.get(mapping.get("zip")          or "", "")).strip()
-    opp_name    = str(row.get(mapping.get("opp_name")     or "", "")).strip()
-    stage       = str(row.get(mapping.get("stage")        or "", "")).strip()
-    close_date  = str(row.get(mapping.get("close_date")   or "", "")).strip()
-    amount      = str(row.get(mapping.get("amount")       or "", "")).strip()
+    name         = str(row.get(mapping.get("account_name")  or "", "")).strip()
+    acct_id      = str(row.get(mapping.get("account_id")    or "", "")).strip()
+    current_raw  = str(row.get(mapping.get("segment")       or "", "")).strip()
+    current_seg  = normalize_segment(current_raw)
+    dnb_raw      = str(row.get(mapping.get("dnb")           or "", "")).strip()
+    dnb_val      = parse_number(dnb_raw)
+    city         = str(row.get(mapping.get("city")          or "", "")).strip()
+    state        = str(row.get(mapping.get("state")         or "", "")).strip()
+    zip_raw      = str(row.get(mapping.get("zip")           or "", "")).strip()
+    created_date = str(row.get(mapping.get("created_date")  or "", "")).strip()
 
     rec = {
         "account_name":     name,
         "account_id":       acct_id,
         "zip":              zip_raw,
-        "city":             city       or "\u2014",
-        "state":            state      or "\u2014",
-        "opp_name":         opp_name   or "\u2014",
-        "stage":            stage      or "\u2014",
-        "close_date":       close_date or "\u2014",
-        "amount":           amount     or "\u2014",
+        "city":             city         or "\u2014",
+        "state":            state        or "\u2014",
+        "created_date":     created_date or "\u2014",
         "current_segment":  current_raw,
-        "dnb_employees":    dnb_raw    or "\u2014",
+        "dnb_employees":    dnb_raw      or "\u2014",
         "expected_segment": "\u2014",
         "status":           "\u2014",
         "basis":            "\u2014",
@@ -428,11 +423,9 @@ def render_table(rows):
         )
         tbody += f"""<tr>
           <td>{he(r['account_name'])}</td>
+          <td><span style="font-family:monospace;font-size:.78rem">{he(str(r.get('account_id','\u2014')))}</span></td>
           <td>{he(str(r['city']))}, {he(str(r['state']))}</td>
-          <td>{he(str(r['opp_name']))}</td>
-          <td>{he(str(r['stage']))}</td>
-          <td>{he(str(r['close_date']))}</td>
-          <td>{he(str(r['amount']))}</td>
+          <td>{he(str(r.get('created_date','\u2014')))}</td>
           <td>{he(r['current_segment'])}</td>
           <td>{he(str(r['dnb_employees']))}</td>
           <td>{he(r['expected_segment'])}</td>
@@ -445,9 +438,8 @@ def render_table(rows):
 <div style="overflow-x:auto">
 <table class="rtable">
   <thead><tr>
-    <th>Account Name</th><th>City, State</th>
-    <th>Opportunity</th><th>Stage</th><th>Close Date</th><th>Amount</th>
-    <th>Current Segment</th><th>D&amp;B Employees</th>
+    <th>Account Name</th><th>Account ID</th><th>City, State</th>
+    <th>Created Date</th><th>Current Segment</th><th>D&amp;B Employees</th>
     <th>Expected Segment</th><th>Status</th><th>Basis</th>
     <th>Suggested Owner</th><th>LinkedIn</th>
   </tr></thead>
@@ -463,10 +455,7 @@ def col_preview_html(col_labels, rows, mapping):
         ("City",            mapping.get("city")),
         ("State",           mapping.get("state")),
         ("Zip",             mapping.get("zip")),
-        ("Opp Name",        mapping.get("opp_name")),
-        ("Stage",           mapping.get("stage")),
-        ("Close Date",      mapping.get("close_date")),
-        ("Amount",          mapping.get("amount")),
+        ("Created Date",    mapping.get("created_date")),
     ]
     sample = rows[:3]
     thead  = "".join(f"<th>{he(f)}</th>" for f, c in fields if c)
@@ -518,10 +507,10 @@ st.markdown("""
 <div style="background:#0070F2;color:white;padding:1.2rem 1.6rem;
             border-radius:8px;margin-bottom:1rem">
   <div style="font-size:1.4rem;font-weight:700;color:white">
-    Open Opportunity Assignment Validator
+    New Account Assignment Validator
   </div>
   <div style="font-size:.88rem;opacity:.85;margin-top:.25rem">
-    Validates ROE segment assignment for accounts with open opportunities
+    Validates ROE segment assignment for newly created accounts
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -637,33 +626,21 @@ if st.session_state.get("rows"):
         zip_col   = st.selectbox("Billing Zip", opt,
             index=_idx(opt, auto_detect(col_labels, "zip", rows, required=False)))
 
-    # Row 3 — opportunity fields
-    r3c1, r3c2, r3c3, r3c4 = st.columns(4)
+    # Row 3 — optional date field
+    r3c1, r3c2, r3c3 = st.columns(3)
     with r3c1:
-        opp_col   = st.selectbox("Opportunity Name", opt,
-            index=_idx(opt, auto_detect(col_labels, "opp_name", rows, required=False)))
-    with r3c2:
-        stage_col = st.selectbox("Stage", opt,
-            index=_idx(opt, auto_detect(col_labels, "stage", rows, required=False)))
-    with r3c3:
-        close_col = st.selectbox("Close Date", opt,
-            index=_idx(opt, auto_detect(col_labels, "close_date", rows, required=False)))
-    with r3c4:
-        amt_col   = st.selectbox("Amount", opt,
-            index=_idx(opt, auto_detect(col_labels, "amount", rows, required=False)))
+        created_col = st.selectbox("Created Date", opt,
+            index=_idx(opt, auto_detect(col_labels, "created_date", rows, required=False)))
 
     mapping = {
         "account_name": acct_col,
-        "account_id":   None if acct_id_col == "(not available)" else acct_id_col,
+        "account_id":   None if acct_id_col   == "(not available)" else acct_id_col,
         "segment":      seg_col,
         "dnb":          dnb_col,
-        "city":         None if city_col  == "(not available)" else city_col,
-        "state":        None if state_col == "(not available)" else state_col,
-        "zip":          None if zip_col   == "(not available)" else zip_col,
-        "opp_name":     None if opp_col   == "(not available)" else opp_col,
-        "stage":        None if stage_col == "(not available)" else stage_col,
-        "close_date":   None if close_col == "(not available)" else close_col,
-        "amount":       None if amt_col   == "(not available)" else amt_col,
+        "city":         None if city_col      == "(not available)" else city_col,
+        "state":        None if state_col     == "(not available)" else state_col,
+        "zip":          None if zip_col       == "(not available)" else zip_col,
+        "created_date": None if created_col   == "(not available)" else created_col,
     }
 
     st.markdown(col_preview_html(col_labels, rows, mapping), unsafe_allow_html=True)
@@ -705,7 +682,7 @@ if st.session_state.get("results"):
     pct     = lambda n: f"{round(n / total * 100)}%" if total else "0%"
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Opportunities",  total)
+    m1.metric("Total Accounts",       total)
     m2.metric("Correctly Assigned",   f"{correct} ({pct(correct)})")
     m3.metric("Incorrectly Assigned", f"{wrong} ({pct(wrong)})")
     m4.metric("Needs Review",         f"{review} ({pct(review)})")
@@ -1123,8 +1100,8 @@ if st.session_state.get("results"):
     st.write("")
     all_buf = io.StringIO()
     all_w   = csv.DictWriter(all_buf, fieldnames=[
-        "account_name", "account_id", "city", "state", "opp_name", "stage",
-        "close_date", "amount", "current_segment", "dnb_employees",
+        "account_name", "account_id", "city", "state", "created_date",
+        "current_segment", "dnb_employees",
         "expected_segment", "status", "basis", "suggested_owner", "linkedin_url",
     ], extrasaction="ignore")
     all_w.writeheader()
