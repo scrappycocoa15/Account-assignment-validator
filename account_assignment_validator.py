@@ -733,14 +733,14 @@ if st.session_state.get("results"):
         )
 
     # ── Column ratios ─────────────────────────────────────────────────────────
-    #  [chk | name | id | city,st | dnb | roe/basis | seg-dropdown | owner ]
-    _INC = [0.32, 2.4, 1.0, 1.15, 0.65, 1.2, 1.6, 2.3]
-    _NR  = [0.32, 2.4, 1.0, 1.15, 0.65, 2.5, 1.6, 2.3, 0.72]
+    #  [chk | name | id | city,st | curr div | dnb | roe/basis | seg-dropdown | owner ]
+    _INC = [0.32, 2.4, 1.0, 1.15, 1.4, 0.65, 1.2, 1.6, 2.3]
+    _NR  = [0.32, 2.4, 1.0, 1.15, 1.4, 0.65, 2.5, 1.6, 2.3, 0.72]
 
     _INC_HDRS = ["", "Account Name", "Account ID", "City, State",
-                 "D&B", "ROE Expects", "Segment to Assign", "Account Owner"]
+                 "Current Division", "D&B", "ROE Expects", "Segment to Assign", "Account Owner"]
     _NR_HDRS  = ["", "Account Name", "Account ID", "City, State",
-                 "D&B", "Basis", "Segment to Assign", "Account Owner", "LinkedIn"]
+                 "Current Division", "D&B", "Basis", "Segment to Assign", "Account Owner", "LinkedIn"]
 
     # Selections built during tab rendering
     inc_selections = []
@@ -790,17 +790,19 @@ if st.session_state.get("results"):
                 with cols[3]:
                     _cell(_cs(r))
                 with cols[4]:
-                    _cell(r["dnb_employees"])
+                    _cell(r["current_segment"])
                 with cols[5]:
-                    _cell(exp)
+                    _cell(r["dnb_employees"])
                 with cols[6]:
+                    _cell(exp)
+                with cols[7]:
                     chosen_seg = st.selectbox(
                         "seg", ["General Business", "US National"],
                         index=1 if exp == "US National" else 0,
                         key=f"inc_seg_{i}",
                         label_visibility="collapsed",
                     )
-                with cols[7]:
+                with cols[8]:
                     disp, owner, owner_id, terr = _owner_str(r.get("zip", ""), chosen_seg)
                     _cell(disp)
 
@@ -848,20 +850,22 @@ if st.session_state.get("results"):
                 with cols[3]:
                     _cell(_cs(r))
                 with cols[4]:
-                    _cell(r["dnb_employees"])
+                    _cell(r["current_segment"])
                 with cols[5]:
-                    _cell(r["basis"])
+                    _cell(r["dnb_employees"])
                 with cols[6]:
+                    _cell(r["basis"])
+                with cols[7]:
                     chosen_seg = st.selectbox(
                         "seg", ["General Business", "US National"],
                         index=0,
                         key=f"nr_seg_{i}",
                         label_visibility="collapsed",
                     )
-                with cols[7]:
+                with cols[8]:
                     disp, owner, owner_id, terr = _owner_str(r.get("zip", ""), chosen_seg)
                     _cell(disp)
-                with cols[8]:
+                with cols[9]:
                     li_url = r.get("linkedin_url", "")
                     if li_url:
                         st.markdown(
